@@ -49,6 +49,21 @@ python -m pip install -e '.[dev]'
 pytest -q
 ```
 
+## Завантаження competition data в Colab
+
+Notebook має окрему клітинку авторизації та завантаження для [multiple-object-video-detection-hw-2-ucu-ai-2026](https://www.kaggle.com/competitions/multiple-object-video-detection-hw-2-ucu-ai-2026). Прийміть правила змагання у своєму акаунті та отримайте API token на https://www.kaggle.com/settings/api. У Colab token вводиться в приховане поле або читається з Secret `KAGGLE_API_TOKEN`; він не записується до репозиторію. Дані розпаковуються до `/content/drone-data`, ZIP після успіху видаляється. Є перевірка місця перед розпакуванням та пропуск уже готового завантаження.
+
+Поза notebook, якщо credentials Kaggle вже налаштовані:
+
+```bash
+python -m pip install -e '.[kaggle]'
+python -m cvlab.kaggle_data --out /content/drone-data
+```
+
+Ключі не додавайте в командні аргументи чи Git. Повторне розпакування після обриву використовує атомарно збережені файли з очікуваним розміром. Реальне завантаження потребує ваших credentials і прав на competition; воно не виконувалося в середовищі розробки.
+
+Джерела: [Kaggle authentication](https://github.com/Kaggle/kaggle-cli/blob/main/docs/README.md#authentication), [competition download](https://github.com/Kaggle/kaggle-cli/blob/main/docs/competitions.md#kaggle-competitions-download).
+
 ## Перший запуск
 
 Працюйте з кореня пакета. Підставте каталог, усередині якого є `train/`, `val/` і `test_images.csv`:

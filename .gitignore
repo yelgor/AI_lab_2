@@ -8,4 +8,8 @@ prepared/
 runs/
 *.pt
 *.zip
+kaggle.json
+access_token
+.env
+*.cvlab-part
 

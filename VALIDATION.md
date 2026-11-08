@@ -19,3 +19,9 @@
 Середовище: Python 3.12.14, torch 2.6.0+cpu, torchvision 0.21.0+cpu, transformers 4.51.3. Є попередження про deprecated API у залежності matplotlib/pyparsing; падінь тестів немає.
 
 Не перевірено: GPU/AMP performance, завантаження реальних pretrained weights, повне навчання на competition dataset, точний leaderboard scorer, leaderboard score. Даних і GPU тут немає. Не трактуйте synthetic tests як підтвердження якості детектора.
+
+## Завантаження Kaggle data в Colab
+
+Додано 8 offline-перевірок downloader та notebook-авторизації: успішне розпакування і кеш, вкладена структура, повторне використання ZIP, відсутність complete marker після збою, перевірка шляхів архіву й вільного місця, відхилення кешу іншого competition, приховане введення token без його появи в command arguments/output, пропуск авторизації для готових даних. Усі 8 пройшли; Ruff також пройшов. CLI syntax та auth звірені з офіційними docs Kaggle CLI 2.2.5.
+
+Ці перевірки використовують локальні тестові ZIP та заміну мережевого виклику. Реальне завантаження 11 GB і перевірка прав приватного competition тут не виконувалися: потрібні credentials учасника.
