@@ -49,6 +49,21 @@ python -m pip install -e '.[dev]'
 pytest -q
 ```
 
+## Готовий ZIP або розпаковані дані
+
+У notebook є optional-клітинка `LOCAL_DATA_SOURCE` перед API-завантаженням. Якщо ZIP уже скачаний через браузер, завантажте його до свого Google Drive та вкажіть повний шлях у цій клітинці. Код під'єднає Drive, збереже вихідний ZIP і розпакує локальну копію. Також підтримуються локальні ZIP і розпаковані папки.
+
+Після встановлення пакета можна використати helper безпосередньо:
+
+```python
+from cvlab.kaggle_data import import_local_data
+import os
+root = import_local_data('/content/drive/MyDrive/AI_lab_2_data/DATASET.zip')
+os.environ['CVLAB_DATA_ROOT'] = str(root)
+```
+
+У цьому режимі Kaggle API та token не потрібні. Далі виконуються звичайні prepare, навчання та inference.
+
 ## Пошук і завантаження competition data
 
 Notebook має клітинку пошуку даних, авторизації та завантаження для [multiple-object-video-detection-hw-2-ucu-ai-2026](https://www.kaggle.com/competitions/multiple-object-video-detection-hw-2-ucu-ai-2026). Прийміть правила змагання у своєму акаунті та отримайте API token на https://www.kaggle.com/settings/api. У Colab token читається з Secret `KAGGLE_API_TOKEN`, у Kaggle — через Kaggle Secrets; також підтримується приховане введення. Ключ не записується до репозиторію. Під’єднані дані використовуються напряму; за їх відсутності дані завантажуються до `/content/drone-data` у Colab або `/kaggle/working/drone-data` у Kaggle. ZIP після успіху видаляється. Є перевірка місця перед розпакуванням та пропуск уже готового завантаження.

@@ -11,6 +11,14 @@
 5. Виконайте doctor → prepare → перегляд EDA. Після першого встановлення перезапустіть Python-сеанс і продовжуйте з клітинки doctor, як вказано в notebook.
 6. Спочатку залиште `MODEL='fcos'`, `FOLD=0`, `SMOKE=True`. Це навчання на двох batches із повною валідацією. Потім `SMOKE=False` для повного run в іншому output-каталозі.
 
+## Дані вже скачані на комп'ютер
+
+Для Colab перенесіть повний ZIP у власний Google Drive (наприклад до папки `AI_lab_2_data`). В оновленому notebook перед API-клітинкою є **«Якщо dataset уже скачаний на комп'ютер»**. Укажіть `LOCAL_DATA_SOURCE` як повний шлях до ZIP у Drive. Приклад: `/content/drive/MyDrive/AI_lab_2_data/multiple-object-video-detection-hw-2-ucu-ai-2026.zip`.
+
+Клітинка під'єднає Drive, збереже оригінал, скопіює архів на локальний диск Colab, розпакує та задасть `CVLAB_DATA_ROOT`. Після цього наступні клітинки використають готові дані без Kaggle API. Перша клітинка встановлення потрібна перед цим режимом; підготовка даних запускається наступною клітинкою `prepare`.
+
+Один `test_images.csv` не замінює повний dataset: потрібні папки з кадрами та labels. Якщо у вас розпакований dataset, можна заархівувати його на комп'ютері або вказати шлях до вже доступної папки в runtime. Для швидкого читання training JPEG рекомендовано розпакувати ZIP на локальний диск Colab.
+
 ## Colab і паралельні експерименти
 
 [Відкрити quickstart у Colab](https://colab.research.google.com/github/yelgor/AI_lab_2/blob/main/notebooks/quickstart.ipynb).

@@ -210,6 +210,56 @@ def ensure_data_root(download_dir=None, input_dir="/kaggle/input"):
     return download_data(download_dir)
 
 
+def import_local_data(source, output=None, competition=COMPETITION):
+    """Use an extracted dataset or import a complete browser-downloaded ZIP.
+
+    The source archive is preserved. Only a copied archive in the working
+    directory is removed after extraction. This path never calls Kaggle API.
+    """
+    source = Path(source).expanduser().resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"Data source does not exist: {source}")
+    if source.is_dir():
+        return find_data_root(source)
+    if not zipfile.is_zipfile(source):
+        raise ValueError(
+            "Потрібен повний ZIP із train/, val/ і test/ або розпакована папка dataset. Один test_images.csv не містить зображень і labels."
+        )
+    validate_competition(competition)
+    if output is None:
+        output = {
+            "colab": Path("/content/drone-data"),
+            "kaggle": Path("/kaggle/working/drone-data"),
+        }.get(detect_runtime(), Path.cwd() / "data" / competition)
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    ready = ready_data_root(output, competition)
+    if ready is not None:
+        print(f"Використовую вже розпаковані дані: {ready}")
+        return ready
+    local_archive = output / f"{competition}.zip"
+    preserve_source = source == local_archive
+    if not preserve_source:
+        with zipfile.ZipFile(source) as archive:
+            archive_members(archive, output)
+            required = source.stat().st_size + sum(
+                member.file_size for member in archive.infolist()
+            )
+        if shutil.disk_usage(output).free < required:
+            raise RuntimeError(
+                f"Для локальної копії ZIP і розпакування потрібно {required / 2**30:.1f} GiB вільного місця"
+            )
+        print(
+            f"Копіюю ZIP на локальний диск: {source.name} ({source.stat().st_size / 2**30:.1f} GiB)",
+            flush=True,
+        )
+        temporary = local_archive.with_name(local_archive.name + ".cvlab-part")
+        shutil.copyfile(source, temporary)
+        temporary.replace(local_archive)
+    # A valid archive is now present, so download_data takes its offline path.
+    return download_data(output, competition, keep_archive=preserve_source)
+
+
 def ready_data_root(directory, competition=COMPETITION):
     directory = Path(directory)
     marker = directory / MARKER

@@ -345,3 +345,112 @@ def test_access_check_downloads_only_small_csv_and_cleans_up(monkeypatch):
     assert calls[0][:3] == ["competitions", "download", kaggle_data.COMPETITION]
     assert calls[0][calls[0].index("--file") + 1] == "test_images.csv"
     assert not Path(calls[0][calls[0].index("--path") + 1]).exists()
+
+
+def test_import_downloaded_zip_preserves_original_and_never_uses_api(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "browser-download.zip"
+    write_archive(source, "competition/")
+    original = source.read_bytes()
+    output = tmp_path / "runtime"
+    monkeypatch.setattr(
+        kaggle_data, "run_kaggle_cli", lambda _: pytest.fail("Unexpected API call")
+    )
+    root = kaggle_data.import_local_data(source, output)
+    assert root == output / "competition"
+    assert source.read_bytes() == original
+    assert not (output / f"{kaggle_data.COMPETITION}.zip").exists()
+    monkeypatch.setattr(
+        kaggle_data.shutil,
+        "copyfile",
+        lambda *a, **k: pytest.fail("Cached data must not be copied again"),
+    )
+    assert kaggle_data.import_local_data(source, output) == root
+
+
+def test_import_already_extracted_data(tmp_path, monkeypatch):
+    root = make_layout(tmp_path / "existing")
+    monkeypatch.setattr(
+        kaggle_data, "run_kaggle_cli", lambda _: pytest.fail("Unexpected API call")
+    )
+    assert kaggle_data.import_local_data(root, tmp_path / "unused") == root
+    assert not (tmp_path / "unused").exists()
+
+
+def test_import_archive_already_in_output_keeps_source(tmp_path, monkeypatch):
+    source = tmp_path / f"{kaggle_data.COMPETITION}.zip"
+    write_archive(source)
+    monkeypatch.setattr(
+        kaggle_data, "run_kaggle_cli", lambda _: pytest.fail("Unexpected API call")
+    )
+    assert kaggle_data.import_local_data(source, tmp_path) == tmp_path
+    assert source.is_file()
+
+
+def test_single_test_csv_is_not_a_dataset_archive(tmp_path):
+    source = tmp_path / "test_images.csv"
+    source.write_text("image_id,file_name\n")
+    with pytest.raises(ValueError, match="повний ZIP"):
+        kaggle_data.import_local_data(source, tmp_path / "runtime")
+
+
+def test_import_checks_space_before_copying(tmp_path, monkeypatch):
+    source = tmp_path / "download.zip"
+    write_archive(source)
+    monkeypatch.setattr(
+        kaggle_data.shutil, "disk_usage", lambda _: SimpleNamespace(free=0)
+    )
+    with pytest.raises(RuntimeError, match="вільного місця"):
+        kaggle_data.import_local_data(source, tmp_path / "runtime")
+    assert source.is_file()
+    assert not (tmp_path / "runtime" / f"{kaggle_data.COMPETITION}.zip").exists()
+
+
+def test_import_validates_archive_before_copying(tmp_path):
+    source = tmp_path / "bad.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("../outside.txt", "test")
+    with pytest.raises(ValueError, match="escapes"):
+        kaggle_data.import_local_data(source, tmp_path / "runtime")
+    assert not (tmp_path / "outside.txt").exists()
+    assert source.is_file()
+
+
+def test_notebook_manual_source_prevents_api_download(tmp_path, monkeypatch):
+    import importlib
+
+    source = tmp_path / "download.zip"
+    write_archive(source)
+    data_root = make_layout(tmp_path / "dataset")
+    monkeypatch.setenv("CVLAB_DATA_ROOT", "")
+    monkeypatch.setattr(importlib, "reload", lambda module: module)
+    monkeypatch.setattr(
+        kaggle_data,
+        "import_local_data",
+        lambda path: data_root if Path(path) == source else pytest.fail("Wrong source"),
+    )
+    monkeypatch.setattr(
+        kaggle_data, "run_kaggle_cli", lambda _: pytest.fail("Unexpected API call")
+    )
+    notebook = json.loads(
+        (Path(__file__).parents[1] / "notebooks/quickstart.ipynb").read_text()
+    )
+    manual = next(
+        "".join(c["source"])
+        for c in notebook["cells"]
+        if c["id"] == "cvlab-local-data-import"
+    )
+    manual = manual.replace(
+        "LOCAL_DATA_SOURCE = ''", "LOCAL_DATA_SOURCE = " + repr(str(source))
+    )
+    namespace = {}
+    exec(compile(manual, "manual-source-cell", "exec"), namespace)
+    automatic = next(
+        "".join(c["source"])
+        for c in notebook["cells"]
+        if c["id"] == "cvlab-kaggle-data-download"
+    )
+    exec(compile(automatic, "automatic-source-cell", "exec"), namespace)
+    assert namespace["DATA_ROOT"] == data_root
+    assert os.environ["CVLAB_DATA_ROOT"] == str(data_root)
