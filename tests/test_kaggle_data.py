@@ -99,22 +99,13 @@ def test_other_competition_cache_is_rejected(tmp_path):
         kaggle_data.download_data(tmp_path)
 
 
-@pytest.mark.parametrize("cached", [False, True])
-def test_notebook_hidden_token_or_cached_data(tmp_path, monkeypatch, capsys, cached):
+@pytest.mark.parametrize("runtime", ["colab", "kaggle"])
+@pytest.mark.parametrize("use_secret", [False, True])
+def test_secret_stores_and_hidden_input(
+    tmp_path, monkeypatch, capsys, runtime, use_secret
+):
     import getpass
 
-    notebook = json.loads(
-        (Path(__file__).parents[1] / "notebooks/quickstart.ipynb").read_text()
-    )
-    source = next(
-        "".join(c["source"])
-        for c in notebook["cells"]
-        if c["id"] == "cvlab-kaggle-data-download"
-    )
-    real_exists = Path.exists
-    monkeypatch.setattr(
-        Path, "exists", lambda p: False if str(p) == "/kaggle" else real_exists(p)
-    )
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     for key in (
         "KAGGLE_API_TOKEN",
@@ -123,27 +114,155 @@ def test_notebook_hidden_token_or_cached_data(tmp_path, monkeypatch, capsys, cac
         "KAGGLE_CONFIG_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
-    # Register this key with monkeypatch before the cell changes it, so it is restored.
     monkeypatch.setenv("KAGGLE_API_TOKEN", "")
-    monkeypatch.setitem(sys.modules, "google.colab", None)
-    monkeypatch.setattr(
-        kaggle_data, "ready_data_root", lambda _: tmp_path if cached else None
+    prompts, secret_calls = [], []
+
+    def secret(name):
+        secret_calls.append(name)
+        return "offline-test-token" if use_secret else None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "google.colab",
+        SimpleNamespace(userdata=SimpleNamespace(get=secret)),
     )
-    prompts, calls = [], []
+    monkeypatch.setitem(
+        sys.modules,
+        "kaggle_secrets",
+        SimpleNamespace(UserSecretsClient=lambda: SimpleNamespace(get_secret=secret)),
+    )
 
     def hidden_input(prompt):
         prompts.append(prompt)
         return "offline-test-token"
 
     monkeypatch.setattr(getpass, "getpass", hidden_input)
-    monkeypatch.setattr(
-        subprocess, "run", lambda arguments, check: calls.append(arguments)
-    )
-    exec(compile(source, "notebook-auth-cell", "exec"), {})
-    if cached:
-        assert not prompts and not calls
-    else:
-        assert len(prompts) == len(calls) == 1
-        assert os.environ["KAGGLE_API_TOKEN"] == "offline-test-token"
-        assert "offline-test-token" not in " ".join(calls[0])
+    kaggle_data.configure_kaggle_credentials(runtime)
+    assert secret_calls == ["KAGGLE_API_TOKEN"]
+    assert len(prompts) == (0 if use_secret else 1)
+    assert os.environ["KAGGLE_API_TOKEN"] == "offline-test-token"
     assert "offline-test-token" not in capsys.readouterr().out
+
+
+def make_layout(root, sample=False):
+    root.mkdir(parents=True, exist_ok=True)
+    for relative in (
+        "train/images",
+        "train/labels",
+        "val/images",
+        "val/labels",
+        "test/images",
+    ):
+        (root / relative).mkdir(parents=True)
+    (root / "test_images.csv").write_text(
+        "image_id,file_name,clip,frame,width,height\n"
+    )
+    if sample:
+        (root / "sample_submission.csv").write_text("image_id,PredictionString\n")
+    return root
+
+
+def test_root_discovery_without_optional_submission_template(tmp_path):
+    root = make_layout(tmp_path / "competition")
+    assert kaggle_data.find_data_root(tmp_path) == root
+
+
+def test_partial_layout_explains_what_is_missing(tmp_path):
+    root = make_layout(tmp_path)
+    (root / "train/labels").rmdir()
+    with pytest.raises(kaggle_data.DatasetNotFoundError, match="train/labels"):
+        kaggle_data.find_data_root(root)
+
+
+@pytest.mark.parametrize("runtime", ["colab", "kaggle"])
+def test_missing_input_downloads_in_either_service(tmp_path, monkeypatch, runtime):
+    monkeypatch.delenv("CVLAB_DATA_ROOT", raising=False)
+    monkeypatch.setattr(kaggle_data, "detect_runtime", lambda: runtime)
+    authentication, downloads = [], []
+    monkeypatch.setattr(
+        kaggle_data, "configure_kaggle_credentials", lambda r: authentication.append(r)
+    )
+    monkeypatch.setattr(
+        kaggle_data,
+        "download_data",
+        lambda p: downloads.append(p) or tmp_path / "ready",
+    )
+    root = kaggle_data.ensure_data_root(
+        download_dir=tmp_path / "cache", input_dir=tmp_path / "empty-input"
+    )
+    assert root == tmp_path / "ready"
+    assert authentication == [runtime]
+    assert downloads == [tmp_path / "cache"]
+
+
+def test_attached_dataset_never_requests_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("CVLAB_DATA_ROOT", raising=False)
+    root = make_layout(tmp_path / "inputs" / "competition")
+    monkeypatch.setattr(
+        kaggle_data,
+        "configure_kaggle_credentials",
+        lambda _: pytest.fail("Unexpected credential request"),
+    )
+    assert kaggle_data.ensure_data_root(input_dir=tmp_path / "inputs") == root
+
+
+def test_cached_dataset_never_requests_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("CVLAB_DATA_ROOT", raising=False)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    write_archive(cache / f"{kaggle_data.COMPETITION}.zip")
+    ready = kaggle_data.download_data(cache)
+    monkeypatch.setattr(
+        kaggle_data,
+        "configure_kaggle_credentials",
+        lambda _: pytest.fail("Unexpected credential request"),
+    )
+    assert (
+        kaggle_data.ensure_data_root(download_dir=cache, input_dir=tmp_path / "empty")
+        == ready
+    )
+
+
+def test_multiple_mounted_datasets_need_explicit_selection(tmp_path, monkeypatch):
+    monkeypatch.delenv("CVLAB_DATA_ROOT", raising=False)
+    a, b = make_layout(tmp_path / "a"), make_layout(tmp_path / "b")
+    with pytest.raises(ValueError, match="Multiple datasets"):
+        kaggle_data.ensure_data_root(input_dir=tmp_path)
+    monkeypatch.setenv("CVLAB_DATA_ROOT", str(b))
+    assert kaggle_data.ensure_data_root(input_dir=a) == b
+
+
+def test_colab_signal_takes_priority_over_kaggle_folder(monkeypatch):
+    monkeypatch.setenv("COLAB_RELEASE_TAG", "test-colab-runtime")
+    monkeypatch.setattr(Path, "is_dir", lambda _: True)
+    assert kaggle_data.detect_runtime() == "colab"
+
+
+def test_bare_kaggle_folder_is_not_a_runtime_signal(monkeypatch):
+    for key in ("COLAB_RELEASE_TAG", "COLAB_BACKEND_VERSION", "KAGGLE_KERNEL_RUN_TYPE"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(
+        sys.modules, "IPython", SimpleNamespace(get_ipython=lambda: None)
+    )
+    monkeypatch.setattr(Path, "is_dir", lambda p: str(p) == "/kaggle")
+    assert kaggle_data.detect_runtime() == "local"
+
+
+def test_notebook_preserves_resolved_data_root(tmp_path, monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("CVLAB_DATA_ROOT", "")
+    monkeypatch.setattr(importlib, "reload", lambda module: module)
+    monkeypatch.setattr(kaggle_data, "ensure_data_root", lambda: tmp_path)
+    notebook = json.loads(
+        (Path(__file__).parents[1] / "notebooks/quickstart.ipynb").read_text()
+    )
+    source = next(
+        "".join(c["source"])
+        for c in notebook["cells"]
+        if c["id"] == "cvlab-kaggle-data-download"
+    )
+    namespace = {}
+    exec(compile(source, "data-cell", "exec"), namespace)
+    assert namespace["DATA_ROOT"] == tmp_path
+    assert os.environ["CVLAB_DATA_ROOT"] == str(tmp_path)

@@ -49,9 +49,9 @@ python -m pip install -e '.[dev]'
 pytest -q
 ```
 
-## Завантаження competition data в Colab
+## Пошук і завантаження competition data
 
-Notebook має окрему клітинку авторизації та завантаження для [multiple-object-video-detection-hw-2-ucu-ai-2026](https://www.kaggle.com/competitions/multiple-object-video-detection-hw-2-ucu-ai-2026). Прийміть правила змагання у своєму акаунті та отримайте API token на https://www.kaggle.com/settings/api. У Colab token вводиться в приховане поле або читається з Secret `KAGGLE_API_TOKEN`; він не записується до репозиторію. Дані розпаковуються до `/content/drone-data`, ZIP після успіху видаляється. Є перевірка місця перед розпакуванням та пропуск уже готового завантаження.
+Notebook має клітинку пошуку даних, авторизації та завантаження для [multiple-object-video-detection-hw-2-ucu-ai-2026](https://www.kaggle.com/competitions/multiple-object-video-detection-hw-2-ucu-ai-2026). Прийміть правила змагання у своєму акаунті та отримайте API token на https://www.kaggle.com/settings/api. У Colab token читається з Secret `KAGGLE_API_TOKEN`, у Kaggle — через Kaggle Secrets; також підтримується приховане введення. Ключ не записується до репозиторію. Під’єднані дані використовуються напряму; за їх відсутності дані завантажуються до `/content/drone-data` у Colab або `/kaggle/working/drone-data` у Kaggle. ZIP після успіху видаляється. Є перевірка місця перед розпакуванням та пропуск уже готового завантаження.
 
 Поза notebook, якщо credentials Kaggle вже налаштовані:
 
@@ -144,7 +144,7 @@ python -m cvlab train --config configs/fcos.yaml --set data.split=official --set
 python -m cvlab predict --config configs/fcos.yaml --set data.split=official --checkpoint runs/fcos_official/best.pt --out runs/submission.csv
 ```
 
-CSV зберігає порядок `sample_submission.csv`: `class score x y width height`. Класи 0–7, координати у вихідних пікселях, порожні прогнози для кадрів без детекцій. Код відновлює letterbox, обрізає boxes і обмежує кількість до 500. Confidence threshold обирайте на validation. Файл автоматично не відправляється у змагання.
+CSV зберігає порядок `sample_submission.csv`, а якщо шаблону немає — порядок `test_images.csv`: `class score x y width height`. Класи 0–7, координати у вихідних пікселях, порожні прогнози для кадрів без детекцій. Код відновлює letterbox, обрізає boxes і обмежує кількість до 500. Confidence threshold обирайте на validation. Файл автоматично не відправляється у змагання.
 
 ```bash
 python -m cvlab summarize runs/fcos_fold0 runs/retinanet_fold0 --out runs/comparison.csv

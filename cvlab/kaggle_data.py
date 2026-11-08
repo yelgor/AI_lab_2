@@ -6,6 +6,7 @@ files. This module never accepts, prints or writes credential values.
 
 import argparse
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -17,26 +18,129 @@ COMPETITION_URL = f"https://www.kaggle.com/competitions/{COMPETITION}"
 MARKER = ".cvlab-download-complete.json"
 
 
+class DatasetNotFoundError(ValueError):
+    """No supported dataset layout was found in the requested directory."""
+
+
+def detect_runtime():
+    """Prefer actual Colab signals over incidental /kaggle directories."""
+    if os.environ.get("COLAB_RELEASE_TAG") or os.environ.get("COLAB_BACKEND_VERSION"):
+        return "colab"
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython()
+        if shell is not None and type(shell).__module__.startswith("google.colab"):
+            return "colab"
+    except ImportError:
+        pass
+    if os.environ.get("KAGGLE_KERNEL_RUN_TYPE") or Path("/kaggle/working").is_dir():
+        return "kaggle"
+    if Path("/content").is_dir():
+        return "colab"
+    return "local"
+
+
+def configure_kaggle_credentials(runtime=None):
+    runtime = runtime or detect_runtime()
+    credential_dir = Path(
+        os.environ.get("KAGGLE_CONFIG_DIR", str(Path.home() / ".kaggle"))
+    )
+    if (
+        os.environ.get("KAGGLE_API_TOKEN")
+        or (os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"))
+        or any(
+            (credential_dir / name).is_file()
+            for name in ("access_token", "kaggle.json")
+        )
+    ):
+        return
+    token = None
+    try:
+        if runtime == "colab":
+            from google.colab import userdata
+
+            token = userdata.get("KAGGLE_API_TOKEN")
+        elif runtime == "kaggle":
+            from kaggle_secrets import UserSecretsClient
+
+            token = UserSecretsClient().get_secret("KAGGLE_API_TOKEN")
+    except Exception:
+        pass  # An unavailable optional secret store falls back to hidden input.
+    if not token:
+        from getpass import getpass
+
+        token = getpass("Kaggle API token (приховане введення): ")
+    if not token or not token.strip():
+        raise ValueError(
+            "Потрібен секрет KAGGLE_API_TOKEN або token із https://www.kaggle.com/settings/api"
+        )
+    os.environ["KAGGLE_API_TOKEN"] = token.strip()
+
+
 def find_data_root(directory):
     """Find exactly one complete competition layout, including nested archives."""
     directory = Path(directory)
     roots = []
-    for csv in directory.rglob("test_images.csv"):
+    candidates = list(directory.rglob("test_images.csv"))
+    missing = []
+    for csv in candidates:
         root = csv.parent
-        required = [root / "sample_submission.csv"]
         folders = [
             root / split / folder
             for split in ("train", "val")
             for folder in ("images", "labels")
         ]
         folders.append(root / "test" / "images")
-        if all(p.is_file() for p in required) and all(p.is_dir() for p in folders):
+        absent = [str(p.relative_to(root)) for p in folders if not p.is_dir()]
+        if not absent:
             roots.append(root)
-    if len(roots) != 1:
+        else:
+            missing.append(f"{root}: missing {', '.join(absent)}")
+    if len(roots) > 1:
         raise ValueError(
-            f"Expected one dataset with train/, val/, test/, test_images.csv and sample_submission.csv; found {len(roots)} in {directory}"
+            "Multiple datasets found; set CVLAB_DATA_ROOT to one explicitly: "
+            + ", ".join(map(str, roots))
+        )
+    if not roots:
+        detail = "; ".join(missing[:5]) if missing else "test_images.csv not found"
+        raise DatasetNotFoundError(
+            f"Dataset not found in {directory}: {detail}. "
+            "On Kaggle, use Add Input to attach the competition, or call ensure_data_root() to download it through the API."
         )
     return roots[0]
+
+
+def ensure_data_root(download_dir=None, input_dir="/kaggle/input"):
+    """Use an explicit path or mounted data; otherwise download with a secret."""
+    configured = os.environ.get("CVLAB_DATA_ROOT")
+    if configured:
+        return find_data_root(configured)
+    runtime = detect_runtime()
+    print(f"Середовище: {runtime}")
+    if input_dir is not None:
+        try:
+            root = find_data_root(input_dir)
+            print(f"Використовую під'єднані дані: {root}")
+            return root
+        except DatasetNotFoundError as error:
+            print(str(error))
+    if download_dir is None:
+        download_dir = {
+            "kaggle": Path("/kaggle/working/drone-data"),
+            "colab": Path("/content/drone-data"),
+        }.get(runtime, Path.cwd() / "data" / COMPETITION)
+    download_dir = Path(download_dir)
+    ready = ready_data_root(download_dir)
+    if ready is not None:
+        print(f"Дані вже готові: {ready}")
+        return ready
+    try:
+        return find_data_root(download_dir)
+    except DatasetNotFoundError:
+        pass
+    configure_kaggle_credentials(runtime)
+    return download_data(download_dir)
 
 
 def ready_data_root(directory, competition=COMPETITION):

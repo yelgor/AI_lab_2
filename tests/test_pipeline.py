@@ -200,6 +200,19 @@ def test_submission_mapping_clipping_and_order(tmp_path):
         )
 
 
+def test_submission_without_template_uses_test_manifest_order(tmp_path):
+    records = [
+        {"id": 2, "submission_id": "b", "width": 100, "height": 50},
+        {"id": 1, "submission_id": "a", "width": 100, "height": 50},
+    ]
+    output = tmp_path / "submission.csv"
+    write_submission(records, [], tmp_path / "missing-template.csv", output)
+    with output.open() as stream:
+        rows = list(csv.DictReader(stream))
+    assert [r["image_id"] for r in rows] == ["b", "a"]
+    assert all(r["PredictionString"] == "" for r in rows)
+
+
 def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     from cvlab.common import load_config
     from cvlab.engine import load_trained, predict, setup, train

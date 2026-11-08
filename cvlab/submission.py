@@ -33,11 +33,15 @@ def write_submission(
             grouped[record["submission_id"]].append(
                 (category, score, x, y, width, height)
             )
-    with Path(sample).open(newline="") as stream:
-        reader = csv.DictReader(stream)
-        if reader.fieldnames != ["image_id", "PredictionString"]:
-            raise ValueError("Unexpected sample_submission.csv columns")
-        ordered_ids = [r["image_id"] for r in reader]
+    if sample is not None and Path(sample).is_file():
+        with Path(sample).open(newline="") as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames != ["image_id", "PredictionString"]:
+                raise ValueError("Unexpected sample_submission.csv columns")
+            ordered_ids = [r["image_id"] for r in reader]
+    else:
+        # Test manifests retain the order and IDs from test_images.csv.
+        ordered_ids = [r["submission_id"] for r in records]
     if len(set(ordered_ids)) != len(ordered_ids) or set(ordered_ids) != set(
         by_submission
     ):
