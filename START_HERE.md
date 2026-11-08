@@ -48,3 +48,16 @@ Notebook підтримує Python 3.11–3.13. Якщо відкрита ста
 Це означає, що повну структуру competition ще не знайдено серед під'єднаних inputs. Оновлена клітинка `ensure_data_root()` спробує API-завантаження з `KAGGLE_API_TOKEN` із Kaggle Secrets. Альтернатива — Add Input → Competitions → multiple-object-video-detection-hw-2-ucu-ai-2026. Діагностика також показує відсутні папки, якщо `test_images.csv` вже знайдено.
 
 Наявність `sample_submission.csv` необов'язкова для підготовки даних: якщо його не опубліковано, submission використовує IDs та порядок із `test_images.csv`.
+
+## Якщо API-завантаження завершилося помилкою
+
+Оновлений downloader показує stdout/stderr Kaggle CLI в notebook та включає справжні останні рядки помилки в exception. Він запускає CLI через той самий Python, що виконує notebook. Значення token із environment і Authorization headers приховуються.
+
+Для короткої діагностики після налаштування Secrets виконайте в notebook:
+
+```python
+from cvlab import kaggle_data
+kaggle_data.check_access()
+```
+
+Ця перевірка завантажує тільки невеликий `test_images.csv` у тимчасовий каталог, потім видаляє його. Вона не запускає повне завантаження dataset. У терміналі з уже налаштованою авторизацією доступна команда `python -m cvlab.kaggle_data --check-access`.

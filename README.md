@@ -64,6 +64,8 @@ python -m cvlab.kaggle_data --out /content/drone-data
 
 Джерела: [Kaggle authentication](https://github.com/Kaggle/kaggle-cli/blob/main/docs/README.md#authentication), [competition download](https://github.com/Kaggle/kaggle-cli/blob/main/docs/competitions.md#kaggle-competitions-download).
 
+Для діагностики помилки завантаження в notebook запустіть `kaggle_data.check_access()`: буде запитано тільки невеликий `test_images.csv`, а не весь dataset. CLI виконується тим самим Python; його фактичний stdout/stderr і return code доступні в notebook з прихованими token/Authorization. У терміналі з налаштованими credentials: `python -m cvlab.kaggle_data --check-access`.
+
 ## Перший запуск
 
 Працюйте з кореня пакета. Підставте каталог, усередині якого є `train/`, `val/` і `test_images.csv`:

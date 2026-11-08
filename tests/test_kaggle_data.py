@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import subprocess
 import sys
@@ -27,20 +28,17 @@ def write_archive(path, prefix=""):
 
 def test_download_extract_and_reuse_without_credentials(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(kaggle_data.shutil, "which", lambda _: "/test/kaggle")
 
-    def run(arguments, check):
+    def run(arguments):
         calls.append(arguments)
-        assert check
-        assert arguments[:4] == [
-            "/test/kaggle",
+        assert arguments[:3] == [
             "competitions",
             "download",
             kaggle_data.COMPETITION,
         ]
         write_archive(tmp_path / f"{kaggle_data.COMPETITION}.zip", "nested/")
 
-    monkeypatch.setattr(kaggle_data.subprocess, "run", run)
+    monkeypatch.setattr(kaggle_data, "run_kaggle_cli", run)
     root = kaggle_data.download_data(tmp_path)
     assert root == tmp_path / "nested"
     assert not list(tmp_path.glob("*.zip"))
@@ -53,20 +51,21 @@ def test_download_extract_and_reuse_without_credentials(tmp_path, monkeypatch):
 def test_existing_archive_does_not_need_cli(tmp_path, monkeypatch):
     path = tmp_path / f"{kaggle_data.COMPETITION}.zip"
     write_archive(path)
-    monkeypatch.setattr(kaggle_data.shutil, "which", lambda _: None)
+    monkeypatch.setattr(
+        kaggle_data, "run_kaggle_cli", lambda _: pytest.fail("Unexpected CLI call")
+    )
     assert kaggle_data.download_data(tmp_path, keep_archive=True) == tmp_path
     assert path.is_file()
 
 
 def test_failed_download_does_not_mark_complete(tmp_path, monkeypatch):
-    monkeypatch.setattr(kaggle_data.shutil, "which", lambda _: "/test/kaggle")
+    def fail(arguments):
+        raise kaggle_data.KaggleCommandError(1, "HTTPError: 401 Unauthorized")
 
-    def fail(arguments, check):
-        raise subprocess.CalledProcessError(1, arguments)
-
-    monkeypatch.setattr(kaggle_data.subprocess, "run", fail)
-    with pytest.raises(RuntimeError, match="401.*403"):
+    monkeypatch.setattr(kaggle_data, "run_kaggle_cli", fail)
+    with pytest.raises(RuntimeError, match="401 Unauthorized") as error:
         kaggle_data.download_data(tmp_path)
+    assert "403" not in str(error.value)
     assert not (tmp_path / kaggle_data.MARKER).exists()
 
 
@@ -266,3 +265,83 @@ def test_notebook_preserves_resolved_data_root(tmp_path, monkeypatch):
     exec(compile(source, "data-cell", "exec"), namespace)
     assert namespace["DATA_ROOT"] == tmp_path
     assert os.environ["CVLAB_DATA_ROOT"] == str(tmp_path)
+
+
+def fake_cli_process(monkeypatch, output, returncode):
+    calls = []
+
+    class Process:
+        def __init__(self):
+            self.stdout = io.StringIO(output)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def wait(self):
+            return returncode
+
+    def popen(arguments, **kwargs):
+        calls.append(arguments)
+        assert kwargs["stdout"] == subprocess.PIPE
+        assert kwargs["stderr"] == subprocess.STDOUT
+        assert kwargs["text"]
+        return Process()
+
+    monkeypatch.setattr(kaggle_data.subprocess, "Popen", popen)
+    return calls
+
+
+def test_cli_uses_current_python_and_streams_output(monkeypatch, capsys):
+    calls = fake_cli_process(monkeypatch, "Kaggle CLI test-version\n", 0)
+    result = kaggle_data.run_kaggle_cli(["--version"])
+    assert calls == [[sys.executable, "-m", "kaggle.cli", "--version"]]
+    assert "Kaggle CLI test-version" in result
+    assert "Kaggle CLI test-version" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "HTTPError: 401 Unauthorized",
+        "HTTPError: 403 Forbidden",
+        "ModuleNotFoundError: No module named 'missing-package'",
+    ],
+)
+def test_cli_preserves_real_failure_and_redacts_tokens(monkeypatch, capsys, failure):
+    token = "KGAT_offline-secret-token"
+    monkeypatch.setenv("KAGGLE_API_TOKEN", token)
+    fake_cli_process(
+        monkeypatch,
+        f"Authorization: Bearer another-secret\ntoken={token}\n{failure}\n",
+        1,
+    )
+    with pytest.raises(kaggle_data.KaggleCommandError) as caught:
+        kaggle_data.run_kaggle_cli(["competitions", "files", kaggle_data.COMPETITION])
+    logged = capsys.readouterr().out + str(caught.value)
+    assert failure in logged
+    assert token not in logged and "another-secret" not in logged
+    assert "[REDACTED]" in logged
+    assert caught.value.returncode == 1
+
+
+def test_access_check_downloads_only_small_csv_and_cleans_up(monkeypatch):
+    authenticated, calls = [], []
+    monkeypatch.setattr(
+        kaggle_data, "configure_kaggle_credentials", lambda: authenticated.append(True)
+    )
+
+    def run(arguments):
+        calls.append(arguments)
+        destination = Path(arguments[arguments.index("--path") + 1])
+        (destination / "test_images.csv").write_text("image_id,file_name\n")
+
+    monkeypatch.setattr(kaggle_data, "run_kaggle_cli", run)
+    kaggle_data.check_access()
+    assert authenticated == [True]
+    assert len(calls) == 1
+    assert calls[0][:3] == ["competitions", "download", kaggle_data.COMPETITION]
+    assert calls[0][calls[0].index("--file") + 1] == "test_images.csv"
+    assert not Path(calls[0][calls[0].index("--path") + 1]).exists()

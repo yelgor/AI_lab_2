@@ -7,10 +7,14 @@ files. This module never accepts, prints or writes credential values.
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import zipfile
+from collections import deque
 from pathlib import Path, PurePosixPath
 
 COMPETITION = "multiple-object-video-detection-hw-2-ucu-ai-2026"
@@ -20,6 +24,69 @@ MARKER = ".cvlab-download-complete.json"
 
 class DatasetNotFoundError(ValueError):
     """No supported dataset layout was found in the requested directory."""
+
+
+def redact_cli_output(text):
+    for name in ("KAGGLE_API_TOKEN", "KAGGLE_KEY"):
+        value = os.environ.get(name)
+        if value:
+            text = text.replace(value, "[REDACTED]")
+    text = re.sub(r"KGAT_[A-Za-z0-9_+/=.-]+", "[REDACTED]", text)
+    return re.sub(r"(?im)(authorization\s*[:=]\s*)[^\r\n]+", r"\1[REDACTED]", text)
+
+
+class KaggleCommandError(RuntimeError):
+    def __init__(self, returncode, details):
+        self.returncode = returncode
+        self.details = redact_cli_output(details)
+        super().__init__(
+            f"Kaggle CLI exited with code {returncode}. Actual output:\n{self.details}"
+        )
+
+
+def run_kaggle_cli(arguments):
+    """Stream the real CLI output through the notebook's Python interpreter."""
+    command = [sys.executable, "-m", "kaggle.cli", *map(str, arguments)]
+    tail = deque(maxlen=25)
+    with subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+    ) as process:
+        for line in process.stdout:
+            clean = redact_cli_output(line)
+            print(clean, end="", flush=True)
+            tail.append(clean.rstrip())
+        returncode = process.wait()
+    details = "\n".join(tail)
+    if returncode:
+        raise KaggleCommandError(returncode, details) from None
+    return details
+
+
+def check_access(competition=COMPETITION):
+    """Test the actual download endpoint using only the small test CSV."""
+    validate_competition(competition)
+    configure_kaggle_credentials()
+    print(f"Python interpreter: {sys.executable}")
+    print(
+        "Перевіряю завантаження лише test_images.csv, без повного dataset.", flush=True
+    )
+    with tempfile.TemporaryDirectory(prefix="cvlab-kaggle-check-") as temporary:
+        run_kaggle_cli(
+            [
+                "competitions",
+                "download",
+                competition,
+                "--file",
+                "test_images.csv",
+                "--path",
+                temporary,
+            ]
+        )
+        if not any(path.is_file() for path in Path(temporary).rglob("*")):
+            raise RuntimeError(
+                "Kaggle CLI exited successfully but did not save the test file"
+            )
+    print("Тестовий файл отримано. Можна запускати повне завантаження.")
 
 
 def detect_runtime():
@@ -180,11 +247,15 @@ def archive_members(archive, output):
     return result
 
 
-def download_data(output, competition=COMPETITION, keep_archive=False):
+def validate_competition(competition):
     if not competition or any(
         c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in competition
     ):
         raise ValueError("Use a Kaggle competition slug, not a URL")
+
+
+def download_data(output, competition=COMPETITION, keep_archive=False):
+    validate_competition(competition)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     ready = ready_data_root(output, competition)
@@ -193,17 +264,11 @@ def download_data(output, competition=COMPETITION, keep_archive=False):
         return ready
     archive_path = output / f"{competition}.zip"
     if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
-        executable = shutil.which("kaggle")
-        if executable is None:
-            raise RuntimeError(
-                "Install the downloader first: python -m pip install -e '.[kaggle]'"
-            )
         print(
             f"Downloading {competition}. The archive contains approximately 11 GB of competition data.",
             flush=True,
         )
         arguments = [
-            executable,
             "competitions",
             "download",
             competition,
@@ -212,14 +277,8 @@ def download_data(output, competition=COMPETITION, keep_archive=False):
         ]
         if archive_path.exists():
             arguments.append("--force")
-        try:
-            # Tokens stay in the inherited environment, never in command arguments.
-            subprocess.run(arguments, check=True)
-        except subprocess.CalledProcessError:
-            raise RuntimeError(
-                "Kaggle download failed. For HTTP 401, check your API token. For HTTP 403, "
-                f"join the competition and accept its rules using the same account: https://www.kaggle.com/competitions/{competition}/rules"
-            ) from None
+        # Tokens stay in the inherited environment, never in command arguments.
+        run_kaggle_cli(arguments)
     if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
         raise RuntimeError(
             "Kaggle did not produce a complete ZIP archive; rerun the download cell"
@@ -266,11 +325,21 @@ def download_data(output, competition=COMPETITION, keep_archive=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out")
     parser.add_argument("--competition", default=COMPETITION)
     parser.add_argument("--keep-archive", action="store_true")
+    parser.add_argument(
+        "--check-access",
+        action="store_true",
+        help="Download only test_images.csv to diagnose access",
+    )
     args = parser.parse_args()
-    download_data(args.out, args.competition, args.keep_archive)
+    if args.check_access:
+        check_access(args.competition)
+    elif args.out:
+        download_data(args.out, args.competition, args.keep_archive)
+    else:
+        parser.error("--out is required unless --check-access is selected")
 
 
 if __name__ == "__main__":
