@@ -30,7 +30,7 @@
 
 ## Встановлення
 
-Python 3.11 або 3.12. Сумісна пара Torch/TorchVision 2.6.0/0.21.0 та Transformers 4.51.3 зафіксовані.
+Python 3.11, 3.12 або 3.13. Сумісна пара Torch/TorchVision 2.6.0/0.21.0 та Transformers 4.51.3 зафіксовані.
 
 ```bash
 git clone https://github.com/yelgor/AI_lab_2.git
@@ -39,7 +39,7 @@ python -m pip install -e '.[dev]'
 python -m cvlab doctor
 ```
 
-Установка може змінити передвстановлений Torch. Після установки в notebook перезапустіть kernel перед імпортом Torch. Для власного сервера оберіть CUDA wheels, сумісні з драйвером, за офіційною інструкцією PyTorch.
+Установка може змінити передвстановлений Torch. Після першого встановлення в notebook перезапустіть Python-сеанс і продовжуйте з клітинки `doctor`. Для власного сервера оберіть CUDA wheels, сумісні з драйвером, за офіційною інструкцією PyTorch.
 
 Для CPU-перевірок:
 

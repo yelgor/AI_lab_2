@@ -8,7 +8,7 @@
 2. Імпортуйте [notebooks/quickstart.ipynb](notebooks/quickstart.ipynb) з цього репозиторію до Kaggle або скопіюйте його клітинки. Можна скачати notebook на GitHub через кнопку Download raw file.
 3. Перша клітинка сама клонує `yelgor/AI_lab_2` у `/kaggle/working/AI_lab_2` і встановить залежності. ZIP не потрібен.
 4. Клітинка `DATA_ROOT` автоматично знайде dataset, якщо під'єднано рівно один каталог із `test_images.csv`. Інакше вкажіть потрібний корінь вручну.
-5. Виконайте doctor → prepare → перегляд EDA. Після установки перезапустіть kernel за потреби, як вказано в notebook.
+5. Виконайте doctor → prepare → перегляд EDA. Після першого встановлення перезапустіть Python-сеанс і продовжуйте з клітинки doctor, як вказано в notebook.
 6. Спочатку залиште `MODEL='fcos'`, `FOLD=0`, `SMOKE=True`. Це навчання на двох batches із повною валідацією. Потім `SMOKE=False` для повного run в іншому output-каталозі.
 
 ## Colab і паралельні експерименти
@@ -38,3 +38,7 @@
 Параметри оптимізації: FP16/BF16, batch, accumulation, CPU workers, prefetch, pinned memory, freeze_backbone. Їхній вплив на AP і швидкість потрібно виміряти на реальному GPU.
 
 Повні команди, протокол ignored regions, метрик та checkpoints — у [README.md](README.md). Результати локальних перевірок — у [VALIDATION.md](VALIDATION.md). Реального навчання на competition dataset у поточному середовищі не було.
+
+## Якщо перше встановлення завершилося помилкою
+
+Notebook підтримує Python 3.11–3.13. Якщо відкрита стара копія з обмеженням Python <3.13, повторно запустіть її першу клітинку: `git pull --ff-only` отримає виправлені вимоги пакета. Для актуальної клітинки з повним виводом pip відкрийте notebook за Colab-посиланням вище заново. Якщо встановлення знову завершиться помилкою, потрібні рядки `ERROR` з виводу pip перед traceback.
