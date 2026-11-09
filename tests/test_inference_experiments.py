@@ -149,6 +149,66 @@ def test_query_detector_resolution_override_stays_rejected(monkeypatch):
         )
 
 
+@pytest.mark.parametrize(
+    "fixed",
+    [
+        {"eval_size": [128, 128], "anchor_image_size": None},
+        {"eval_size": None, "anchor_image_size": [128, 128]},
+    ],
+)
+def test_query_detector_with_static_metadata_still_rejects_resize(monkeypatch, fixed):
+    from cvlab.engine import load_trained
+
+    old = {"name": "rtdetr", "image_size": 128}
+    monkeypatch.setattr(
+        torch,
+        "load",
+        lambda *a, **kw: {"config": {"model": old}, "adapter": {"hf_config": fixed}},
+    )
+    with pytest.raises(ValueError, match="differs"):
+        load_trained(
+            "own.pt", {"model": {**old, "image_size": 160}}, torch.device("cpu")
+        )
+
+
+def test_dynamic_rtdetr_resize_preserves_weights_and_real_forward(monkeypatch):
+    from cvlab.engine import load_trained
+    from cvlab.models import build_model
+
+    torch.set_num_threads(2)
+    source = {
+        "name": "rtdetr",
+        "pretrained": False,
+        "image_size": 128,
+        "num_queries": 20,
+        "num_denoising": 0,
+        "max_detections": 20,
+        "score_threshold": 0.001,
+        "box_loss": "giou",
+    }
+    original = build_model(source)
+    metadata = original.export_metadata()
+    assert metadata["hf_config"]["eval_size"] is None
+    assert metadata["hf_config"]["anchor_image_size"] is None
+    checkpoint = {
+        "config": {"model": source},
+        "adapter": metadata,
+        "model": original.state_dict(),
+    }
+    monkeypatch.setattr(torch, "load", lambda *a, **kw: checkpoint)
+    resized = load_trained(
+        "own.pt", {"model": {**source, "image_size": 160}}, torch.device("cpu")
+    )
+    for key, value in original.state_dict().items():
+        torch.testing.assert_close(value, resized.state_dict()[key], rtol=0, atol=0)
+    resized.eval()
+    with torch.inference_mode():
+        prediction = resized.predict([torch.rand(3, 160, 160)])[0]
+    assert torch.isfinite(prediction["boxes"]).all()
+    assert len(prediction["scores"]) == 20
+    assert prediction["labels"].min() >= 1 and prediction["labels"].max() <= 8
+
+
 def test_global_lock_prevents_multiple_waiting_experiments(tmp_path, monkeypatch):
     import fcntl
     from cvlab import inference_experiments as experiments

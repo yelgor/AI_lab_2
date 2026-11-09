@@ -505,6 +505,18 @@ def load_trained(checkpoint_path, config, device):
         # These CNN detectors have no learned parameters tied to input size.
         # The new size is used by both letterbox and the detector transform.
         inference_only.add("image_size")
+    elif checkpoint["config"]["model"]["name"] == "rtdetr":
+        hf_config = (checkpoint.get("adapter") or {}).get("hf_config", {})
+        # Pinned RT-DETR builds positional encodings and anchors from feature
+        # shapes when both settings are explicitly dynamic. Learned weights
+        # and query count are independent of input resolution in this case.
+        if (
+            "eval_size" in hf_config
+            and hf_config["eval_size"] is None
+            and "anchor_image_size" in hf_config
+            and hf_config["anchor_image_size"] is None
+        ):
+            inference_only.add("image_size")
     trained_architecture = {
         k: v
         for k, v in checkpoint["config"]["model"].items()

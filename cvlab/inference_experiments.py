@@ -116,9 +116,9 @@ def _compare(config, checkpoint, output, sizes, max_images):
     from .metrics import evaluate
     from .prepare import select_records
 
-    if config["model"]["name"] not in {"retinanet", "fcos", "fasterrcnn"}:
+    if config["model"]["name"] not in {"retinanet", "fcos", "fasterrcnn", "rtdetr"}:
         raise ValueError(
-            "Inference resolution override is supported for TorchVision CNN detectors"
+            "Unknown detector; supported: TorchVision CNN detectors and dynamic RT-DETR"
         )
     if not sizes or any(size < 64 or size % 32 for size in sizes):
         raise ValueError("All resolutions must be multiples of 32, >=64")

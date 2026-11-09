@@ -249,7 +249,7 @@ Tiling/SAHI, tracking, ensembles, ONNX/TensorRT, DDP, W&B і автоматич�
 
 ### Роздільність інференсу без перенавчання
 
-Для Faster R-CNN, RetinaNet та FCOS можна перевіряти інший `model.image_size` із тим самим checkpoint. Ваги, backbone topology й losses не змінюються; розмір застосовується і до letterbox, і до внутрішнього transform детектора. Для RT-DETR таке перевизначення залишається забороненим.
+Для Faster R-CNN, RetinaNet та FCOS можна перевіряти інший `model.image_size` із тим самим checkpoint. Ваги, backbone topology й losses не змінюються; розмір застосовується і до letterbox, і до внутрішнього transform детектора. RT-DETR також підтримує зміну розміру, якщо збережений `adapter.hf_config` явно містить `eval_size=None` та `anchor_image_size=None`: позиційні кодування й anchors тоді будуються з поточних feature shapes. Відсутня metadata або фіксовані розміри залишають resize забороненим. Кількість queries та інші параметри архітектури змінювати під час відновлення не можна.
 
 ```bash
 python -u -m cvlab evaluate-resolutions \
@@ -317,6 +317,22 @@ python -u -m cvlab predict-submission \
 ```
 
 Використовуються batch 1 і workers 0, з тими самими правилами frozen checkpoint, потокового CSV та фінальної перевірки. Перед моделлю перевіряються доступні RAM (щонайменше 2 GiB) і VRAM (вказаний бюджет плюс 512 MiB), після чого `torch.cuda.set_per_process_memory_fraction` обмежує allocator лише нового exporter-процесу. CUDA context та сторонні CUDA allocations можуть додавати пам'ять поза цим лімітом. Це не резервує VRAM і не встановлює ліміт іншому trainer; його майбутній пік і спільні GPU compute впливають на результат. Швидкість і ETA виводяться після кожної порції; паралельний exporter може сповільнити навчання. CLI має prefix `predict`, тому очікувачі GPU бачать його. CPU-варіант можна залишити незалежним резервом до готового GPU CSV.
+
+### Кандидати для перевищення Kaggle baseline
+
+Ціль цього змагання — перевищити `0.2216324580` на Kaggle. Наступний сценарій спочатку чекає GPU lease поточної черги, а потім працює на GPU з готовими `best.pt`. Поточне навчання не переривається.
+
+```bash
+python -u scripts/start_score_improvement.py \
+  --work "$CVLAB_LOCAL_WORK" --models rtdetr fasterrcnn \
+  --sizes 960 1280 1536 --max-images 192 --vram-gib 6
+```
+
+Спочатку створюються native-resolution CSV обох моделей. Повідомлення `FIRST CANDIDATE READY FOR KAGGLE` означає, що файл уже можна завантажити, поки пошук триває. Копії checkpoint заморожуються з SHA-256 у `score_improvement/`; початкові checkpoints не змінюються. Кожен CSV перевіряється на відповідність тестовим IDs, координатам, класам і ліміту детекцій.
+
+Далі для кожної моделі порівнюються 960/1280/1536 на тих самих 192 кадрах **офіційної val**, яка не використовувалася в навчанні fold0. Перетин training sequences з цим holdout забороняється; fingerprint source split має відповідати checkpoint. Якщо більший розмір перемагає, обидва розміри вимірюються на **всій official val**. Лише після цього зберігається CSV обраного розміру. Для однакового AP обирається менший розмір. Розмір, який не вміщується у GPU budget, пропускається; інші CUDA errors не приховуються.
+
+Результати знаходяться в `score_improvement/summary.json`; готові CSV — в `submissions/<model>_<checkpoint-sha>_<size>.csv`. Повний validation кешується з IDs та fingerprint. Ці official-val scores не замінюють попередні fold0/OOF scores і не порівнюються з ними як приріст. Kaggle score записаний як `null`, доки CSV не оцінено самим змаганням. Скрипт не використовує leaderboard для вибору розміру та не відправляє CSV автоматично. Повторний запуск захищений lock; записи поточної GPU черги захищені окремим work lease, який успадковується активним процесом.
 
 ## Здача роботи
 

@@ -102,3 +102,6 @@ The submission path supports a separate `predict-submission` CLI with FP16 CUDA 
 ### Indexed CUDA allocator device
 
 Eight focused submission tests pass. CUDA memory configuration resolves an unindexed `torch.device('cuda')` through `torch.cuda.current_device()` and passes an explicit integer index to memory APIs. Regression cases cover default, explicit zero and nonzero devices and invoke the real Torch 2.6 device-argument validator inside the mocked allocator call, reproducing the argument contract without GPU hardware. The earlier test mock accepted an unindexed device and missed this compatibility error.
+### Resolution candidates for the Kaggle baseline
+
+31 targeted tests passed across inference experiments, score improvement, and chunked submissions. They include a real RT-DETR forward at a different input size with exact weight preservation, rejection of static/missing RT-DETR metadata, frozen checkpoint provenance, official-holdout leakage rejection, native CSV exports before search, full-validation rejection of a subset winner, OOM fallback, cached full-validation reuse, and inherited GPU-lease / duplicate-launch checks. Existing CPU export and GPU-budget unit tests also pass. These CPU tests do not measure a VisDrone AP gain or a Kaggle score.

@@ -38,6 +38,16 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    score = commands.add_parser(
+        "evaluate-score",
+        help="Validate resolution improvements and export score candidates",
+    )
+    score.add_argument("--work", required=True)
+    score.add_argument("--models", nargs="+", default=["rtdetr", "fasterrcnn"])
+    score.add_argument("--sizes", nargs="+", type=int, default=[960, 1280, 1536])
+    score.add_argument("--max-images", type=int, default=192)
+    score.add_argument("--vram-gib", type=float, default=6)
+    score.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     overlap = commands.add_parser(
         "train-overlap", help="Overlap CPU metrics with GPU training across model runs"
     )
@@ -171,6 +181,17 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "evaluate-score":
+        from .score_improvement import run
+
+        run(
+            args.work,
+            args.models,
+            args.sizes,
+            args.max_images,
+            args.vram_gib,
+            args.lock_fd,
+        )
     elif args.command == "evaluate-resolutions":
         from .inference_experiments import compare_resolutions
 
