@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--max-images", type=int, default=192)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--vram-gib", type=float, default=6)
+    parser.add_argument("--min-gain", type=float, default=0.01)
     args = parser.parse_args()
     work = args.work.resolve()
     if not (work / "runs").is_dir():
@@ -63,6 +64,8 @@ def main():
                     str(args.workers),
                     "--vram-gib",
                     str(args.vram_gib),
+                    "--min-gain",
+                    str(args.min_gain),
                 ],
             )
 

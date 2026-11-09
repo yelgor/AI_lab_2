@@ -111,3 +111,6 @@ Eight focused submission tests pass. CUDA memory configuration resolves an unind
 ### Full frame plus overlapping tiles
 
 49 targeted tiling, export, score-search and resolution tests passed. The new tiling tests cover full crop-grid coverage on odd dimensions, global-view deduplication, the view-count bound, box restoration with crop offsets, interior-edge filtering, class-specific duplicate removal and the final 500-per-image cap. A real generator/CPU detector path checks inference mode, uint8 worker payloads, a spawn worker, original-image bounds, streamed CSV creation, sample order and provenance reuse. A real randomly initialized RT-DETR also completes global-plus-tile forwards with valid boxes. Search tests exercise the actual tiled predictor and CSV exporter end to end with a deterministic CPU detector, including rejecting a subset winner that loses on full validation. They also check inherited leases and duplicate-launch protection. No VisDrone/Kaggle gain is claimed by these CPU tests.
+### Minimum useful tiling gain
+
+51 targeted tests passed after adding `--min-gain` (default 0.01 absolute mAP) before tiled test export. Tests distinguish a loss, a positive but small 0.003 gain, an exact 0.01 boundary and a larger improvement. Metrics/caches remain available when export is skipped. This is a compute-budget rule, not a predicted Kaggle gain.

@@ -61,7 +61,9 @@ def selected_size(work, name, sha, native):
     return native
 
 
-def run(work, models, sides, ious, max_images, vram_gib, workers, lock_fd):
+def run(
+    work, models, sides, ious, max_images, vram_gib, workers, lock_fd, min_gain=0.01
+):
     import torch
     from .engine import load_trained, predict, setup
     from .metrics import evaluate
@@ -77,6 +79,8 @@ def run(work, models, sides, ious, max_images, vram_gib, workers, lock_fd):
         raise ValueError("Unique models and positive validation subset required")
     if not sides or not ious or any(not 0 < iou <= 1 for iou in ious):
         raise ValueError("Valid NMS IoUs required")
+    if not math.isfinite(min_gain) or not 0 <= min_gain <= 1:
+        raise ValueError("min_gain must be finite and in [0,1]")
     for side in sides:
         TileOptions(side, nms_iou=ious[0], workers=workers).validate()
     work = Path(work).resolve()
@@ -88,6 +92,7 @@ def run(work, models, sides, ious, max_images, vram_gib, workers, lock_fd):
         report = {
             "validation_split": "official",
             "target_kaggle_score": 0.2216324580,
+            "minimum_full_validation_gain": min_gain,
             "models": [],
         }
         for name in models:
@@ -238,10 +243,13 @@ def run(work, models, sides, ious, max_images, vram_gib, workers, lock_fd):
                     write_json(candidate_path, candidate)
                 entry["full_global"] = baseline
                 entry["full_candidate"] = candidate
-                if (
+                gain = (
                     candidate["metrics"]["coco100"]["mAP"]
-                    > baseline["metrics"]["coco100"]["mAP"] + 1e-5
-                ):
+                    - baseline["metrics"]["coco100"]["mAP"]
+                )
+                entry["full_validation_gain"] = gain
+                entry["minimum_full_validation_gain"] = min_gain
+                if gain > 0 and gain + 1e-12 >= min_gain:
                     destination = (
                         work
                         / "submissions"
@@ -262,7 +270,8 @@ def run(work, models, sides, ious, max_images, vram_gib, workers, lock_fd):
                     )
                 else:
                     entry["outcome"] = (
-                        "Subset improvement did not generalize; keeping existing global prediction"
+                        f"Full-validation gain={gain:.5f} below export threshold {min_gain:.5f}; "
+                        "keeping existing global prediction"
                     )
             model = None
             release_gpu()

@@ -11,7 +11,9 @@ from cvlab.common import digest
 from test_tiled_inference import SimpleDetector, competition
 
 
-@pytest.mark.parametrize("full_score,improved", [(0.3, True), (0.05, False)])
+@pytest.mark.parametrize(
+    "full_score,improved", [(0.3, True), (0.11, True), (0.103, False), (0.05, False)]
+)
 def test_search_uses_full_holdout_and_real_tiled_export(
     tmp_path, monkeypatch, full_score, improved
 ):
@@ -79,7 +81,8 @@ def test_search_uses_full_holdout_and_real_tiled_export(
         assert "Full-validation improvement" in entry["outcome"]
     else:
         assert "submission" not in entry
-        assert "did not generalize" in entry["outcome"]
+        assert "below export threshold" in entry["outcome"]
+    assert entry["minimum_full_validation_gain"] == 0.01
 
 
 def test_tiling_launcher_inherits_gpu_lease_and_rejects_duplicates(

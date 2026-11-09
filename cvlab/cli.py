@@ -49,6 +49,7 @@ def main():
     tiles.add_argument("--max-images", type=int, default=192)
     tiles.add_argument("--workers", type=int, default=2)
     tiles.add_argument("--vram-gib", type=float, default=6)
+    tiles.add_argument("--min-gain", type=float, default=0.01)
     tiles.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     score = commands.add_parser(
         "evaluate-score",
@@ -207,6 +208,7 @@ def main():
             args.vram_gib,
             args.workers,
             args.lock_fd,
+            args.min_gain,
         )
     elif args.command == "evaluate-score":
         from .score_improvement import run
