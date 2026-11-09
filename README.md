@@ -156,6 +156,25 @@ wait
 
 Перед запуском задайте `CVLAB_LOCAL_WORK` як шлях до робочого диска, а `CVLAB_WAIT_PID` — PID поточного launcher, який охоплює training і подальше evaluate. Черга дочекається його завершення та відсутності інших CVLab jobs. З `--predict-retina` спочатку генерується початковий `submissions/retinanet_fold0.csv`, потім запускаються вибрані моделі. Checkpoints відновлюються автоматично; відсутній validation artifact відтворюється з best.pt. Скрипт сам не завантажує дані й не надсилає submission до Kaggle. Для фонового виконання використовуйте nohup і systemd-inhibit, як для поточного локального навчання.
 
+Для генерації лише першого submission, без нових training jobs, передайте порожній список `--models`:
+
+```bash
+.venv/bin/python -u scripts/local_gpu_queue.py \
+  --work "$CVLAB_LOCAL_WORK" --wait-pid "$CVLAB_WAIT_PID" --predict-retina --models
+```
+
+### Перевірка артефактів паралельно з навчанням
+
+`scripts/check_lab.py` працює на CPU без імпорту Torch/NumPy та без завантаження tensors. Читаються лише невеликі metadata; великі manifests і validation predictions не завантажуються. Скрипт показує вільну RAM/VRAM, наявні результати моделей, виміряні folds, обмежені smoke-runs і перетин sequences зі split.json. Checkpoint перевіряється лише на наявність ZIP-контейнера; його tensors і фаза без завантаження ваг не підтверджуються. Наявність folds або predictions-файлу не означає перевіреного OOF.
+
+```bash
+.venv/bin/python scripts/check_lab.py --work "$CVLAB_LOCAL_WORK"
+.venv/bin/python scripts/check_lab.py --work "$CVLAB_LOCAL_WORK" \
+  --submission "$CVLAB_LOCAL_WORK/submissions/retinanet_fold0.csv"
+```
+
+JSON зберігається у `WORK/checks/status.json`. CSV перевіряється потоково: точний набір image_id, дублікати, шість полів на детекцію, класи 0–7, скінченні scores/координати, межі оригінального кадру, позитивні розміри та cap=500. Порожній submission структурно валідний, але окремо позначається `all_predictions_empty`. Перевищення Kaggle baseline, узгодженість повного CV/OOF, аналіз експериментів та звіт потребують окремої перевірки; чекер не оцінює готовність до здачі автоматично.
+
 ## Checkpoints, оцінювання і submission
 
 ```bash

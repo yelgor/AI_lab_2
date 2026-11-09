@@ -81,3 +81,16 @@ def test_duplicate_queue_does_not_start_jobs(queue, work, monkeypatch):
     with (work / ".local_gpu_queue.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         queue.main(["--work", str(work)])
+
+
+def test_prediction_only_never_starts_training(queue, work, monkeypatch):
+    checkpoint = work / "runs/retinanet_fold0_local/best.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    calls = []
+    monkeypatch.setattr(queue, "wait_for_gpu", lambda pid=None: None)
+    monkeypatch.setattr(
+        queue, "run_cli", lambda project, arguments: calls.append(arguments)
+    )
+    queue.main(["--work", str(work), "--predict-retina", "--models"])
+    assert len(calls) == 1 and calls[0][0] == "predict"

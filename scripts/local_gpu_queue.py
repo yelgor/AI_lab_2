@@ -76,7 +76,7 @@ def main(argv=None):
     parser.add_argument("--wait-pid", type=int)
     parser.add_argument(
         "--models",
-        nargs="+",
+        nargs="*",
         default=["fcos", "fasterrcnn", "rtdetr"],
         choices=["fcos", "fasterrcnn", "retinanet", "rtdetr"],
     )
