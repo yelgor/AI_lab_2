@@ -247,7 +247,7 @@ def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     assert read_json(output / "config.json")["data"]["horizontal_flip"] == 0.5
 
 
-@pytest.mark.parametrize("interruption", ["validation", "prediction_write"])
+@pytest.mark.parametrize("interruption", ["validation", "metrics", "prediction_write"])
 def test_resume_matches_uninterrupted_training(
     competition, tmp_path, monkeypatch, interruption
 ):
@@ -269,6 +269,7 @@ def test_resume_matches_uninterrupted_training(
     )
     config["output"] = str(tmp_path / "interrupted")
     real_predict, real_write_json, calls = engine.predict, engine.write_json, []
+    real_evaluate = engine.evaluate
 
     def interrupt_second_validation(*args, **kwargs):
         calls.append(1)
@@ -282,8 +283,16 @@ def test_resume_matches_uninterrupted_training(
             raise RuntimeError("simulated failure after checkpoint save")
         return real_write_json(path, value)
 
+    def interrupt_metrics(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("simulated metrics OOM")
+        return real_evaluate(*args, **kwargs)
+
     if interruption == "validation":
         monkeypatch.setattr(engine, "predict", interrupt_second_validation)
+    elif interruption == "metrics":
+        monkeypatch.setattr(engine, "evaluate", interrupt_metrics)
     else:
         monkeypatch.setattr(engine, "write_json", interrupt_prediction_write)
     with pytest.raises(RuntimeError, match="simulated"):
@@ -295,7 +304,34 @@ def test_resume_matches_uninterrupted_training(
         assert not (output / "val_predictions.json").exists()
     monkeypatch.setattr(engine, "predict", real_predict)
     monkeypatch.setattr(engine, "write_json", real_write_json)
-    engine.train(config, resume=output / "last.pt")
+    monkeypatch.setattr(engine, "evaluate", real_evaluate)
+    if interruption in ("validation", "metrics"):
+        checkpoint = torch.load(
+            output / "last.pt", map_location="cpu", weights_only=False
+        )
+        assert checkpoint["epoch"] == 1
+        assert checkpoint["validation_pending"] is not None
+        if interruption == "metrics":
+            # A completed training phase must still be validated when the
+            # restored wall-clock budget has already been exhausted.
+            checkpoint["elapsed_seconds"] = config["train"]["max_hours"] * 3600 + 1
+            torch.save(checkpoint, output / "last.pt")
+        del checkpoint
+        from cvlab.models import TVDetector
+
+        def no_repeated_training(*args, **kwargs):
+            raise AssertionError("Training repeated after validation failure")
+
+        with monkeypatch.context() as recovery:
+            recovery.setattr(TVDetector, "loss", no_repeated_training)
+            engine.train(config, resume=output / "last.pt")
+    else:
+        # User checkpoints from before validation staging lack this field.
+        legacy = torch.load(output / "last.pt", map_location="cpu", weights_only=False)
+        legacy.pop("validation_pending")
+        torch.save(legacy, output / "last.pt")
+        del legacy
+        engine.train(config, resume=output / "last.pt")
     resumed = torch.load(
         Path(config["output"]) / "last.pt", map_location="cpu", weights_only=False
     )

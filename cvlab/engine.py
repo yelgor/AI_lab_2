@@ -253,6 +253,7 @@ def train(config, resume=None):
     )
     generator = torch.Generator().manual_seed(config["seed"])
     start_epoch, best, elapsed_before = 0, -1.0, 0.0
+    pending_validation = None
     if resume:
         # Only load checkpoints you created; torch checkpoints are trusted Python artifacts.
         old = checkpoint["config"]
@@ -270,8 +271,9 @@ def train(config, resume=None):
         scheduler.load_state_dict(checkpoint["scheduler"])
         scaler.load_state_dict(checkpoint["scaler"])
         restore_rng(checkpoint["rng"], generator)
+        pending_validation = checkpoint.get("validation_pending")
         start_epoch, best, elapsed_before = (
-            checkpoint["epoch"] + 1,
+            checkpoint["epoch"] + (pending_validation is None),
             checkpoint["best"],
             checkpoint["elapsed_seconds"],
         )
@@ -295,47 +297,95 @@ def train(config, resume=None):
     accumulation = tc["accumulation"]
     if accumulation < 1:
         raise ValueError("accumulation must be >= 1")
+
+    def snapshot(epoch, progress=None):
+        return {
+            "config": config,
+            "model": model.state_dict(),
+            "adapter": model.export_metadata(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
+            "rng": rng_state(generator),
+            "epoch": epoch,
+            "best": best,
+            "elapsed_seconds": elapsed_before + time.perf_counter() - started,
+            "data_fingerprint": data_hash,
+            "validation_pending": progress,
+        }
+
     for epoch in range(start_epoch, tc["epochs"]):
-        if elapsed_before + time.perf_counter() - started >= tc["max_hours"] * 3600:
+        if (
+            pending_validation is None
+            and elapsed_before + time.perf_counter() - started >= tc["max_hours"] * 3600
+        ):
             break
-        model.train()
-        optimizer.zero_grad(set_to_none=True)
-        batches = min(len(loader), tc.get("max_batches_per_epoch") or len(loader))
-        total_loss, observed, stop = 0.0, 0, False
-        for index, (images, targets, _) in enumerate(loader):
-            if index >= batches:
-                break
-            images, targets = move(images, targets, device)
-            group_start = (index // accumulation) * accumulation
-            group_size = min(accumulation, batches - group_start)
-            with amp_context(config, device):
-                losses = model.loss(images, targets)
-                loss = sum(losses.values())
-            if not torch.isfinite(loss):
-                raise RuntimeError(
-                    f"Non-finite loss at epoch={epoch}, batch={index}: {losses}"
-                )
-            scaler.scale(loss / group_size).backward()
-            total_loss += loss.item()
-            observed += 1
-            boundary = (index + 1) % accumulation == 0 or index + 1 == batches
-            if boundary:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), tc["clip_grad"])
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad(set_to_none=True)
-                if (
-                    elapsed_before + time.perf_counter() - started
-                    >= tc["max_hours"] * 3600
-                ):
-                    stop = True
+        if pending_validation is None:
+            model.train()
+            optimizer.zero_grad(set_to_none=True)
+            batches = min(len(loader), tc.get("max_batches_per_epoch") or len(loader))
+            total_loss, observed, stop = 0.0, 0, False
+            print(f"epoch={epoch} training; up to {batches} batches", flush=True)
+            for index, (images, targets, _) in enumerate(loader):
+                if index >= batches:
                     break
-        if not observed:
-            break
-        scheduler.step()
-        print(f"epoch={epoch} training complete; running validation", flush=True)
+                images, targets = move(images, targets, device)
+                group_start = (index // accumulation) * accumulation
+                group_size = min(accumulation, batches - group_start)
+                with amp_context(config, device):
+                    losses = model.loss(images, targets)
+                    loss = sum(losses.values())
+                if not torch.isfinite(loss):
+                    raise RuntimeError(
+                        f"Non-finite loss at epoch={epoch}, batch={index}: {losses}"
+                    )
+                scaler.scale(loss / group_size).backward()
+                total_loss += loss.item()
+                observed += 1
+                if observed % 250 == 0:
+                    print(
+                        f"epoch={epoch} batch={observed}/{batches} mean_loss={total_loss / observed:.4f}",
+                        flush=True,
+                    )
+                boundary = (index + 1) % accumulation == 0 or index + 1 == batches
+                if boundary:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), tc["clip_grad"])
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    if (
+                        elapsed_before + time.perf_counter() - started
+                        >= tc["max_hours"] * 3600
+                    ):
+                        stop = True
+                        break
+            if not observed:
+                break
+            scheduler.step()
+            pending_validation = {
+                "loss_sum": total_loss,
+                "observed": observed,
+                "batches": batches,
+                "stop": stop,
+            }
+            atomic_checkpoint(output / "last.pt", snapshot(epoch, pending_validation))
+            print(
+                f"epoch={epoch} training complete; checkpoint saved; running validation",
+                flush=True,
+            )
+        else:
+            total_loss, observed, batches, stop = (
+                pending_validation[key]
+                for key in ("loss_sum", "observed", "batches", "stop")
+            )
+            print(
+                f"epoch={epoch} resuming saved validation; no training batches repeated",
+                flush=True,
+            )
+        pending_validation = None
         predictions, timing = predict(model, config, validation, device)
+        print(f"epoch={epoch} inference complete; computing COCO metrics", flush=True)
         scores = evaluate(
             validation, predictions, config["evaluation"]["max_detections"]
         )
@@ -357,19 +407,7 @@ def train(config, resume=None):
         }
         with (output / "history.jsonl").open("a") as stream:
             stream.write(json.dumps(log, allow_nan=False) + "\n")
-        payload = {
-            "config": config,
-            "model": model.state_dict(),
-            "adapter": model.export_metadata(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "scaler": scaler.state_dict(),
-            "rng": rng_state(generator),
-            "epoch": epoch,
-            "best": best,
-            "elapsed_seconds": elapsed,
-            "data_fingerprint": data_hash,
-        }
+        payload = snapshot(epoch)
         atomic_checkpoint(output / "last.pt", payload)
         if improved:
             atomic_checkpoint(output / "best.pt", payload)
