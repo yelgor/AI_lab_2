@@ -262,7 +262,106 @@ def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     )
 
 
-@pytest.mark.parametrize("interruption", ["validation", "metrics", "prediction_write"])
+def test_spawn_loader_works_while_cpu_metrics_thread_is_active(
+    competition, monkeypatch
+):
+    import threading
+    from cvlab import validation_pipeline
+    from cvlab.common import load_config
+    from cvlab.data import make_loader
+
+    root, prepared = competition
+    config = load_config(Path(__file__).parents[1] / "configs/fcos.yaml")
+    config["data"].update(root=str(root), prepared=str(prepared), split="official")
+    config["model"]["image_size"] = 128
+    config["loader"].update(workers=1, batch_size=2, pin_memory=False)
+    started, release = threading.Event(), threading.Event()
+
+    def metrics():
+        started.set()
+        assert release.wait(30)
+
+    monkeypatch.setattr(validation_pipeline, "finish_validation", metrics)
+    with validation_pipeline.ValidationPipeline(0) as pipeline:
+        pipeline.submit()
+        assert started.wait(5)
+        try:
+            loader = make_loader(
+                config,
+                select_records(config, "train"),
+                True,
+                torch.Generator().manual_seed(42),
+                worker_context="spawn",
+            )
+            assert len(next(iter(loader))[0]) == 2
+        finally:
+            release.set()
+
+
+def test_overlapped_validation_matches_serial_and_really_overlaps(
+    competition, tmp_path, monkeypatch
+):
+    import threading
+    from cvlab import engine, validation_pipeline
+    from cvlab.common import load_config
+    from cvlab.models import TVDetector
+
+    root, prepared = competition
+    config = load_config(Path(__file__).parents[1] / "configs/fcos.yaml")
+    config["data"].update(root=str(root), prepared=str(prepared), split="official")
+    config["model"].update(pretrained=False, image_size=128, max_detections=20)
+    config["runtime"].update(device="cpu", precision="fp32", cpu_threads=2)
+    config["loader"].update(workers=0, batch_size=2, pin_memory=False)
+    config["evaluation"]["warmup_batches"] = 0
+    config["train"].update(epochs=2, max_batches_per_epoch=1, max_hours=1)
+    config["output"] = str(tmp_path / "serial")
+    engine.train(config)
+    config["output"] = str(tmp_path / "overlap")
+    entered_metrics, entered_next_training = threading.Event(), threading.Event()
+    original_evaluate, original_loss = validation_pipeline.evaluate, TVDetector.loss
+    calls = {"metrics": 0, "loss": 0}
+
+    def waiting_metrics(*args, **kwargs):
+        calls["metrics"] += 1
+        if calls["metrics"] == 1:
+            entered_metrics.set()
+            assert entered_next_training.wait(20), (
+                "Next training phase did not overlap CPU metrics"
+            )
+        return original_evaluate(*args, **kwargs)
+
+    def training(*args, **kwargs):
+        calls["loss"] += 1
+        if calls["loss"] == 2:
+            assert entered_metrics.wait(20)
+            entered_next_training.set()
+        return original_loss(*args, **kwargs)
+
+    monkeypatch.setattr(validation_pipeline, "evaluate", waiting_metrics)
+    monkeypatch.setattr(TVDetector, "loss", training)
+    with validation_pipeline.ValidationPipeline(minimum_available_mib=0) as pipeline:
+        engine.train(config, validation_pipeline=pipeline)
+    assert entered_next_training.is_set()
+    for filename in ("last.pt", "best.pt"):
+        serial = torch.load(
+            tmp_path / "serial" / filename, map_location="cpu", weights_only=False
+        )
+        overlap = torch.load(
+            tmp_path / "overlap" / filename, map_location="cpu", weights_only=False
+        )
+        assert serial["epoch"] == overlap["epoch"]
+        assert serial["best"] == overlap["best"]
+        assert serial["scheduler"] == overlap["scheduler"]
+        for key in serial["model"]:
+            torch.testing.assert_close(
+                serial["model"][key], overlap["model"][key], rtol=0, atol=0
+            )
+    assert len((tmp_path / "overlap/history.jsonl").read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize(
+    "interruption", ["validation", "metrics", "prediction_write", "async_metrics"]
+)
 def test_resume_matches_uninterrupted_training(
     competition, tmp_path, monkeypatch, interruption
 ):
@@ -308,10 +407,18 @@ def test_resume_matches_uninterrupted_training(
         monkeypatch.setattr(engine, "predict", interrupt_second_validation)
     elif interruption == "metrics":
         monkeypatch.setattr(engine, "evaluate", interrupt_metrics)
+    elif interruption == "async_metrics":
+        from cvlab import validation_pipeline
+
+        monkeypatch.setattr(validation_pipeline, "evaluate", interrupt_metrics)
     else:
         monkeypatch.setattr(engine, "write_json", interrupt_prediction_write)
     with pytest.raises(RuntimeError, match="simulated"):
-        engine.train(config)
+        if interruption == "async_metrics":
+            with validation_pipeline.ValidationPipeline(0) as pipeline:
+                engine.train(config, validation_pipeline=pipeline)
+        else:
+            engine.train(config)
     output = Path(config["output"])
     assert (output / "last.pt").is_file()
     if interruption == "prediction_write":
@@ -320,7 +427,9 @@ def test_resume_matches_uninterrupted_training(
     monkeypatch.setattr(engine, "predict", real_predict)
     monkeypatch.setattr(engine, "write_json", real_write_json)
     monkeypatch.setattr(engine, "evaluate", real_evaluate)
-    if interruption in ("validation", "metrics"):
+    if interruption == "async_metrics":
+        monkeypatch.setattr(validation_pipeline, "evaluate", real_evaluate)
+    if interruption in ("validation", "metrics", "async_metrics"):
         checkpoint = torch.load(
             output / "last.pt", map_location="cpu", weights_only=False
         )

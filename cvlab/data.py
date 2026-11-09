@@ -105,7 +105,7 @@ def collate(batch):
     return tuple(map(list, zip(*batch)))
 
 
-def make_loader(config, records, training, generator=None):
+def make_loader(config, records, training, generator=None, worker_context=None):
     cfg = config["loader"]
     workers = cfg["workers"]
     data = Frames(
@@ -124,6 +124,8 @@ def make_loader(config, records, training, generator=None):
         "generator": generator,
     }
     if workers:
+        if worker_context is not None:
+            options["multiprocessing_context"] = worker_context
         options["prefetch_factor"] = cfg["prefetch_factor"]
         # Keep false by default: recreating workers gives reproducible epoch-boundary resume.
         options["persistent_workers"] = cfg.get("persistent_workers", False)

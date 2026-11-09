@@ -109,9 +109,9 @@ def move(images, targets, device):
 
 
 @torch.inference_mode()
-def predict(model, config, records, device):
+def predict(model, config, records, device, worker_context=None):
     model.eval()
-    loader = make_loader(config, records, False)
+    loader = make_loader(config, records, False, worker_context=worker_context)
     warmup = config["evaluation"].get("warmup_batches", 2)
     if warmup:
         images, targets, _ = next(iter(loader))
@@ -204,7 +204,7 @@ def atomic_checkpoint(path, checkpoint):
     temporary.replace(path)
 
 
-def train(config, resume=None):
+def train(config, resume=None, validation_pipeline=None):
     device = setup(config)
     output = Path(config["output"])
     if resume and Path(resume).resolve() != (output / "last.pt").resolve():
@@ -216,6 +216,15 @@ def train(config, resume=None):
             f"Run directory already exists: {output}. Choose a new output or use --resume."
         )
     output.mkdir(parents=True, exist_ok=True)
+    if validation_pipeline is not None:
+        write_json(
+            output / "execution.json",
+            {
+                "validation_mode": "CPU metrics overlapped with GPU training",
+                "max_cpu_validation_jobs": 1,
+                "wall_clock_budget_includes_overlap": True,
+            },
+        )
     training, validation = (
         select_records(config, "train"),
         select_records(config, "val"),
@@ -292,7 +301,10 @@ def train(config, resume=None):
             "val_sequences": sorted({r["sequence_id"] for r in validation}),
         },
     )
-    loader = make_loader(config, training, True, generator)
+    worker_context = "spawn" if validation_pipeline is not None else None
+    loader = make_loader(
+        config, training, True, generator, worker_context=worker_context
+    )
     started = time.perf_counter()
     accumulation = tc["accumulation"]
     if accumulation < 1:
@@ -314,6 +326,7 @@ def train(config, resume=None):
             "validation_pending": progress,
         }
 
+    validation_job = None
     for epoch in range(start_epoch, tc["epochs"]):
         if (
             pending_validation is None
@@ -321,6 +334,8 @@ def train(config, resume=None):
         ):
             break
         if pending_validation is None:
+            if validation_pipeline is not None:
+                validation_pipeline.memory_gate()
             model.train()
             optimizer.zero_grad(set_to_none=True)
             batches = min(len(loader), tc.get("max_batches_per_epoch") or len(loader))
@@ -362,6 +377,11 @@ def train(config, resume=None):
                         break
             if not observed:
                 break
+            if validation_pipeline is not None:
+                validation_pipeline.wait()
+                if validation_job is not None:
+                    best = validation_job.result()
+                    validation_job = None
             scheduler.step()
             pending_validation = {
                 "loss_sum": total_loss,
@@ -384,8 +404,41 @@ def train(config, resume=None):
                 flush=True,
             )
         pending_validation = None
-        predictions, timing = predict(model, config, validation, device)
+        if validation_pipeline is not None:
+            # Bound host memory: never collect a second validation prediction
+            # set while CPU metrics still retain the previous set.
+            validation_pipeline.wait()
+        predictions, timing = predict(
+            model, config, validation, device, worker_context=worker_context
+        )
         print(f"epoch={epoch} inference complete; computing COCO metrics", flush=True)
+        if validation_pipeline is not None:
+            from .validation_pipeline import cpu_snapshot
+
+            log = {
+                "epoch": epoch,
+                "train_loss": total_loss / observed,
+                "train_batches": observed,
+                "epoch_complete": observed == batches,
+                "timing": timing,
+                "lr": [group["lr"] for group in optimizer.param_groups],
+            }
+            payload = cpu_snapshot(snapshot(epoch))
+            validation_job = validation_pipeline.submit(
+                output,
+                config,
+                validation,
+                predictions,
+                timing,
+                payload,
+                log,
+                elapsed_before,
+                started,
+            )
+            del predictions, payload
+            if stop:
+                break
+            continue
         scores = evaluate(
             validation, predictions, config["evaluation"]["max_detections"]
         )
@@ -434,7 +487,14 @@ def train(config, resume=None):
         )
         if stop:
             break
-    print(f"Run artifacts: {output.resolve()}")
+    if validation_pipeline is None:
+        print(f"Run artifacts: {output.resolve()}")
+    else:
+        print(
+            f"GPU phases complete: {output.resolve()}; CPU metrics may still be running",
+            flush=True,
+        )
+    return validation_job
 
 
 def load_trained(checkpoint_path, config, device):

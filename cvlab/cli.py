@@ -38,6 +38,16 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    overlap = commands.add_parser(
+        "train-overlap", help="Overlap CPU metrics with GPU training across model runs"
+    )
+    overlap.add_argument("--work", required=True)
+    overlap.add_argument(
+        "--models",
+        nargs="+",
+        default=["fcos", "fasterrcnn", "rtdetr"],
+        choices=["fcos", "fasterrcnn", "retinanet", "rtdetr"],
+    )
     resolutions = commands.add_parser(
         "evaluate-resolutions",
         help="Compare inference sizes with a fixed checkpoint and validation subset",
@@ -137,6 +147,10 @@ def main():
                 "model_config": model_config,
             },
         )
+    elif args.command == "train-overlap":
+        from .overlap_queue import run
+
+        run(args.work, args.models)
     elif args.command == "evaluate-resolutions":
         from .inference_experiments import compare_resolutions
 
