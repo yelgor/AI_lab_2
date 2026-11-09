@@ -48,6 +48,15 @@ def main():
         default=["fcos", "fasterrcnn", "rtdetr"],
         choices=["fcos", "fasterrcnn", "retinanet", "rtdetr"],
     )
+    export = commands.add_parser(
+        "predict-submission", help="Generate a verified submission in bounded chunks"
+    )
+    export.add_argument("--run", required=True)
+    export.add_argument("--out", required=True)
+    export.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+    export.add_argument("--threads", type=int, default=2)
+    export.add_argument("--chunk-size", type=int, default=16)
+    export.add_argument("--vram-gib", type=float, default=1.5)
     resolutions = commands.add_parser(
         "evaluate-resolutions",
         help="Compare inference sizes with a fixed checkpoint and validation subset",
@@ -146,6 +155,17 @@ def main():
                 "predictions": predictions,
                 "model_config": model_config,
             },
+        )
+    elif args.command == "predict-submission":
+        from .submit_cpu import create_submission
+
+        create_submission(
+            args.run,
+            args.out,
+            args.threads,
+            args.chunk_size,
+            device_name=args.device,
+            vram_gib=args.vram_gib,
         )
     elif args.command == "train-overlap":
         from .overlap_queue import run

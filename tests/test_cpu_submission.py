@@ -119,3 +119,71 @@ def test_cpu_submission_rejects_duplicate_writer(tmp_path):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(RuntimeError, match="already running"):
             create_submission(tmp_path / "unused", output)
+
+
+def test_gpu_budget_limits_only_export_allocator(monkeypatch):
+    import torch
+    from cvlab.submit_cpu import _cuda_budget
+    from cvlab import submit_cpu
+
+    monkeypatch.setattr(submit_cpu, "_available_ram_mib", lambda: 8192)
+
+    calls = []
+    monkeypatch.setattr(
+        torch.cuda, "mem_get_info", lambda device: (5 * 1024**3, 8 * 1024**3)
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "set_per_process_memory_fraction",
+        lambda fraction, device: calls.append((fraction, device)),
+    )
+    _cuda_budget("cuda", 1.5)
+    assert calls == [(1.5 / 8, "cuda")]
+    monkeypatch.setattr(
+        torch.cuda, "mem_get_info", lambda device: (1024**3, 8 * 1024**3)
+    )
+    with pytest.raises(RuntimeError, match="Insufficient"):
+        _cuda_budget("cuda", 1.5)
+    assert len(calls) == 1
+    monkeypatch.setattr(submit_cpu, "_available_ram_mib", lambda: 1000)
+    with pytest.raises(RuntimeError, match="Less than 2 GiB"):
+        _cuda_budget("cuda", 1.5)
+
+
+def test_gpu_submission_uses_fp16_and_applies_cap_before_loading(tmp_path, monkeypatch):
+    from cvlab import engine, submit_cpu
+
+    run = fixture_run(tmp_path)
+    capped = []
+    monkeypatch.setattr(engine, "setup", lambda config: "cuda")
+    monkeypatch.setattr(
+        submit_cpu, "_cuda_budget", lambda device, budget: capped.append(budget)
+    )
+
+    def load(path, config, device):
+        assert capped == [1.5]
+        assert config["runtime"]["device"] == "cuda"
+        assert config["runtime"]["precision"] == "fp16"
+        return object()
+
+    monkeypatch.setattr(engine, "load_trained", load)
+    monkeypatch.setattr(
+        engine,
+        "predict",
+        lambda model, config, records, device: (
+            [
+                {
+                    "image_id": record["id"],
+                    "category_id": 1,
+                    "score": 0.9,
+                    "bbox": [1, 2, 3, 4],
+                }
+                for record in records
+            ],
+            {},
+        ),
+    )
+    checked = create_submission(
+        run, tmp_path / "gpu.csv", device_name="cuda", vram_gib=1.5
+    )
+    assert checked["valid"] and checked["images"] == 3

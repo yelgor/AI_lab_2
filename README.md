@@ -305,6 +305,19 @@ CUDA_VISIBLE_DEVICES="" python -u -m cvlab.submit_cpu \
 
 Модуль копіює поточний `best.pt` у тимчасовий каталог на work-диску та генерує прогнози з цим незмінним snapshot. Використовуються FP32 на CPU, batch 1 та workers 0. Вхідний розмір, класи, пороги та NMS зберігаються. Прогнози тримаються лише для поточної порції кадрів; CSV записується поступово, у порядку `sample_submission.csv`. Прогрес містить оброблені кадри, швидкість та ETA. Фінальний `.csv` з'являється після перевірки IDs, 0-based класів, координат, confidence та ліміту 500 детекцій. Порожній для всіх кадрів результат не публікується. Metadata JSON містить SHA-256 frozen checkpoint та CSV, fingerprint test і конфігурацію inference. Наявний фінальний CSV зберігається, дублювання writers блокується lock. Це CPU-альтернатива з вимірюваним часом; вона не обіцяє швидкості GPU або конкретного leaderboard score.
 
+### Submission на GPU з окремим бюджетом VRAM
+
+Коли поточне навчання залишає достатньо VRAM, можна спробувати паралельний FP16-інференс:
+
+```bash
+python -u -m cvlab predict-submission \
+  --run "$CVLAB_LOCAL_WORK/runs/fasterrcnn_fold0_local" \
+  --out "$CVLAB_LOCAL_WORK/submissions/fasterrcnn_fold0_gpu.csv" \
+  --device cuda --vram-gib 1.5 --threads 2 --chunk-size 16
+```
+
+Використовуються batch 1 і workers 0, з тими самими правилами frozen checkpoint, потокового CSV та фінальної перевірки. Перед моделлю перевіряються доступні RAM (щонайменше 2 GiB) і VRAM (вказаний бюджет плюс 512 MiB), після чого `torch.cuda.set_per_process_memory_fraction` обмежує allocator лише нового exporter-процесу. CUDA context та сторонні CUDA allocations можуть додавати пам'ять поза цим лімітом. Це не резервує VRAM і не встановлює ліміт іншому trainer; його майбутній пік і спільні GPU compute впливають на результат. Швидкість і ETA виводяться після кожної порції; паралельний exporter може сповільнити навчання. CLI має prefix `predict`, тому очікувачі GPU бачать його. CPU-варіант можна залишити незалежним резервом до готового GPU CSV.
+
 ## Здача роботи
 
 Після отримання викладацького GitHub template пакет потрібно перенести до нього. README — інструкція запуску, не фінальний звіт. Ще потрібно виконати реальні навчання й tuning, аналіз failure cases, графіки порівняння, перевершити competition baseline, написати власний звіт і пройти захист. Для бонусу visualization потрібно додати W&B.

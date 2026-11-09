@@ -1,10 +1,11 @@
-"""Create a verified submission on CPU alongside the GPU training queue."""
+"""Verified chunked submissions; the legacy module entrypoint uses CPU."""
 
 import argparse
 import copy
 import csv
 import fcntl
 import hashlib
+import math
 import shutil
 import tempfile
 import time
@@ -13,7 +14,9 @@ from pathlib import Path
 from .common import digest, read_json, write_json
 
 
-def create_submission(run, output, threads=4, chunk_size=16):
+def create_submission(
+    run, output, threads=4, chunk_size=16, device_name="cpu", vram_gib=None
+):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.with_suffix(output.suffix + ".lock").open("a") as lock:
@@ -23,12 +26,45 @@ def create_submission(run, output, threads=4, chunk_size=16):
             raise RuntimeError(
                 f"Submission generation already running: {output}"
             ) from None
-        return _create_submission(run, output, threads, chunk_size)
+        return _create_submission(
+            run, output, threads, chunk_size, device_name, vram_gib
+        )
 
 
-def _create_submission(run, output, threads, chunk_size):
+def _available_ram_mib():
+    memory = Path("/proc/meminfo")
+    if not memory.is_file():
+        return None
+    fields = dict(line.split(":", 1) for line in memory.read_text().splitlines())
+    return int(fields["MemAvailable"].split()[0]) / 1024
+
+
+def _cuda_budget(device, vram_gib):
+    import torch
+
+    if vram_gib is None or not math.isfinite(vram_gib) or vram_gib <= 0:
+        raise ValueError("CUDA export requires a finite positive VRAM budget")
+    available = _available_ram_mib()
+    if available is not None and available < 2048:
+        raise RuntimeError("Less than 2 GiB RAM available; export not started")
+    free, total = torch.cuda.mem_get_info(device)
+    budget = int(vram_gib * 1024**3)
+    if budget >= total or free < budget + 512 * 1024**2:
+        raise RuntimeError(
+            "Insufficient free GPU memory for export budget plus 512 MiB margin"
+        )
+    torch.cuda.set_per_process_memory_fraction(budget / total, device)
+    print(
+        f"PyTorch GPU budget={budget / 1024**2:.0f} MiB; free={free / 1024**2:.0f} MiB",
+        flush=True,
+    )
+
+
+def _create_submission(run, output, threads, chunk_size, device_name, vram_gib):
     if threads < 1 or chunk_size < 1:
         raise ValueError("threads and chunk_size must be positive")
+    if device_name not in {"cpu", "cuda"}:
+        raise ValueError("device must be cpu or cuda")
     run, output = Path(run), Path(output)
     if output.exists():
         raise FileExistsError(f"Submission already exists; preserved: {output}")
@@ -38,7 +74,11 @@ def _create_submission(run, output, threads, chunk_size):
     from scripts.check_lab import validate_submission
 
     config = copy.deepcopy(read_json(run / "config.json"))
-    config["runtime"].update(device="cpu", precision="fp32", cpu_threads=threads)
+    config["runtime"].update(
+        device=device_name,
+        precision="fp16" if device_name == "cuda" else "fp32",
+        cpu_threads=threads,
+    )
     config["loader"].update(
         batch_size=1, workers=0, pin_memory=False, persistent_workers=False
     )
@@ -56,8 +96,10 @@ def _create_submission(run, output, threads, chunk_size):
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     device = setup(config)
+    if device_name == "cuda":
+        _cuda_budget(device, vram_gib)
     print(
-        f"CPU submission: {len(records)} frames; threads={threads}; chunk={chunk_size}",
+        f"{device_name.upper()} submission: {len(records)} frames; threads={threads}; chunk={chunk_size}",
         flush=True,
     )
     # Freeze the checkpoint before the trainer can atomically replace best.pt.
@@ -113,7 +155,9 @@ def _create_submission(run, output, threads, chunk_size):
                 "checkpoint_sha256": hasher.hexdigest(),
                 "test_fingerprint": digest(records),
                 "inference_config": config,
-                "cpu_inference_seconds": time.perf_counter() - started,
+                "inference_seconds": time.perf_counter() - started,
+                "device": device_name,
+                "pytorch_vram_budget_gib": vram_gib if device_name == "cuda" else None,
                 "validation": checked,
             },
         )
