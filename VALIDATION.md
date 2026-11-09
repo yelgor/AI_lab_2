@@ -93,3 +93,6 @@ COCO verbosity is suppressed only in the evaluating thread. The previous process
 ### Resolution probe launcher wrappers
 
 13 inference-experiment tests passed. GPU-idle detection now inspects `/proc/<pid>/cmdline` for the actual Python `-m cvlab` invocation rather than matching wrapper command text. Coverage includes inhibitor/shell/Python `-c` wrappers, real train/evaluate CLI forms, and a live Python-wrapper subprocess regression that exits instead of waiting on its own parent. Existing real CNN resize/weight-equality, RT-DETR rejection, sampling and global-lock tests still pass. This fixes a queued probe waiting indefinitely under `systemd-inhibit`; GPU inference quality was not measured by these CPU tests.
+### CPU submission generation
+
+Five targeted tests passed: chunked output in exact template order, preservation of empty image rows and conversion of internal class 8 to submission class 7, frozen checkpoint isolation while a newer best appears, existing-file and duplicate-writer protection, all-empty rejection, and a real FCOS CPU inference/submission validation in the end-to-end pipeline test. Ruff and CLI help checks pass. The full 3,811-frame VisDrone test inference and its wall time must run on the user's machine; no competition CSV or score was fabricated in the cloud workspace.

@@ -260,6 +260,12 @@ def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     assert all(
         case["metrics"]["coco100"]["mAP"] is not None for case in probe["experiments"]
     )
+    from cvlab.submit_cpu import create_submission
+
+    checked = create_submission(
+        output, tmp_path / "cpu_submission.csv", threads=2, chunk_size=1
+    )
+    assert checked["valid"] and checked["images"] == 1
 
 
 def test_spawn_loader_works_while_cpu_metrics_thread_is_active(
