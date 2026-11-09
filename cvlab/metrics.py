@@ -1,6 +1,7 @@
 import contextlib
 import copy
-import io
+import sys
+import threading
 from collections import defaultdict
 
 import numpy as np
@@ -8,6 +9,49 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
 from .common import CLASSES
+
+
+_stdout_lock = threading.RLock()
+
+
+class _ThreadOutput:
+    def __init__(self, original):
+        self.original = original
+        self.local = threading.local()
+        self.users = 0
+
+    def write(self, value):
+        if getattr(self.local, "depth", 0):
+            return len(value)
+        return self.original.write(value)
+
+    def flush(self):
+        if not getattr(self.local, "depth", 0):
+            return self.original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+
+@contextlib.contextmanager
+def _quiet_coco_output():
+    # redirect_stdout changes the process-wide stream, swallowing GPU trainer
+    # progress when COCO metrics run in another thread. Suppress this thread only.
+    with _stdout_lock:
+        proxy = sys.stdout
+        if not isinstance(proxy, _ThreadOutput):
+            proxy = _ThreadOutput(proxy)
+            sys.stdout = proxy
+        proxy.users += 1
+        proxy.local.depth = getattr(proxy.local, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        with _stdout_lock:
+            proxy.local.depth -= 1
+            proxy.users -= 1
+            if not proxy.users and sys.stdout is proxy:
+                sys.stdout = proxy.original
 
 
 def coco_ground_truth(records, category_ids=None):
@@ -133,7 +177,7 @@ def evaluate(records, predictions, max_detections=(100, 500), *, image_batch_siz
     for prediction in predictions:
         by_image[(prediction["category_id"], prediction["image_id"])].append(prediction)
     result = {}
-    with contextlib.redirect_stdout(io.StringIO()):
+    with _quiet_coco_output():
         classes = []
         for category_id in range(1, len(CLASSES) + 1):
             precision, evaluated_caps, ious = _class_precision(
