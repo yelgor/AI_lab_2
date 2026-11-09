@@ -144,6 +144,18 @@ wait
 
 Не перезаписуйте однакові run-каталоги при об'єднанні результатів. FPS різних GPU не є прямим порівнянням архітектур. Однаковий час навчання на різних GPU також не означає однаковий compute budget.
 
+### Черга на одному локальному GPU
+
+`scripts/local_gpu_queue.py` запускає моделі послідовно, використовуючи локальне середовище та вже підготовлені дані. Він бере data/loader/runtime, seed, роздільність та бюджет із `WORK/configs/retinanet_fold0_local.yaml`, а архітектуру й відповідні model settings — із конфігурації кожної моделі. Наявні конфігурації з іншими налаштуваннями не перезаписуються. Один lock захищає від дублювання черги.
+
+```bash
+.venv/bin/python -u scripts/local_gpu_queue.py \
+  --work "$CVLAB_LOCAL_WORK" --wait-pid "$CVLAB_WAIT_PID" \
+  --predict-retina --models fcos fasterrcnn rtdetr
+```
+
+Перед запуском задайте `CVLAB_LOCAL_WORK` як шлях до робочого диска, а `CVLAB_WAIT_PID` — PID поточного launcher, який охоплює training і подальше evaluate. Черга дочекається його завершення та відсутності інших CVLab jobs. З `--predict-retina` спочатку генерується початковий `submissions/retinanet_fold0.csv`, потім запускаються вибрані моделі. Checkpoints відновлюються автоматично; відсутній validation artifact відтворюється з best.pt. Скрипт сам не завантажує дані й не надсилає submission до Kaggle. Для фонового виконання використовуйте nohup і systemd-inhibit, як для поточного локального навчання.
+
 ## Checkpoints, оцінювання і submission
 
 ```bash
