@@ -90,3 +90,6 @@ COCO evaluation розбито по класах і групах до 32 кад�
 ### Concurrent progress output
 
 COCO verbosity is suppressed only in the evaluating thread. The previous process-wide `redirect_stdout` could hide GPU training progress during asynchronous CPU evaluation. Tests cover live training output during a blocked metrics task, nested suppression/error cleanup, and overlapping quiet threads. The targeted output/COCO/pipeline/postprocessing regression suite passed 26 CPU tests; reference COCO precision equality is retained. Already running Python processes retain their imported implementation until their next launch.
+### Resolution probe launcher wrappers
+
+13 inference-experiment tests passed. GPU-idle detection now inspects `/proc/<pid>/cmdline` for the actual Python `-m cvlab` invocation rather than matching wrapper command text. Coverage includes inhibitor/shell/Python `-c` wrappers, real train/evaluate CLI forms, and a live Python-wrapper subprocess regression that exits instead of waiting on its own parent. Existing real CNN resize/weight-equality, RT-DETR rejection, sampling and global-lock tests still pass. This fixes a queued probe waiting indefinitely under `systemd-inhibit`; GPU inference quality was not measured by these CPU tests.

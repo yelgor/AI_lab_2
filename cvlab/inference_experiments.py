@@ -35,6 +35,32 @@ def balanced_subset(records, limit):
     return [records[index] for index in sorted(indices)]
 
 
+def _is_cvlab_job(pid, proc=Path("/proc")):
+    """Match the actual Python module invocation, excluding inhibitor/shell wrappers."""
+    try:
+        argv = (
+            (proc / str(pid) / "cmdline").read_bytes().decode().strip("\0").split("\0")
+        )
+    except (OSError, UnicodeError):
+        return False
+    if not argv or not Path(argv[0]).name.startswith("python"):
+        return False
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        if option == "-m":
+            return (
+                argv[index + 1 : index + 2] == ["cvlab"]
+                and len(argv) > index + 2
+                and argv[index + 2].split("-", 1)[0]
+                in {"train", "evaluate", "predict", "benchmark"}
+            )
+        if option == "-c" or not option.startswith("-"):
+            return False
+        index += 2 if option in {"-W", "-X", "--check-hash-based-pycs"} else 1
+    return False
+
+
 def wait_for_idle(poll_seconds=5):
     announced = False
     while True:
@@ -45,12 +71,16 @@ def wait_for_idle(poll_seconds=5):
         )
         if result.returncode not in (0, 1):
             raise RuntimeError(result.stderr)
-        others = [int(pid) for pid in result.stdout.split() if int(pid) != os.getpid()]
+        others = [
+            int(pid)
+            for pid in result.stdout.split()
+            if int(pid) != os.getpid() and _is_cvlab_job(int(pid))
+        ]
         if not others:
             return
         if not announced:
             print(
-                "Waiting for current CVLab jobs; the model queue will yield to this experiment.",
+                "Waiting for the current CVLab GPU queue to finish.",
                 flush=True,
             )
             announced = True

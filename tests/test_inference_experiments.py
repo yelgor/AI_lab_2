@@ -43,8 +43,58 @@ def test_wait_excludes_own_pid_and_waits_for_other_jobs(monkeypatch):
     monkeypatch.setattr(
         experiments.time, "sleep", lambda seconds: waits.append(seconds)
     )
+    monkeypatch.setattr(experiments, "_is_cvlab_job", lambda pid: True)
     wait_for_idle(0.1)
     assert waits == [0.1]
+
+
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        (["/venv/bin/python", "-u", "-m", "cvlab", "train-overlap"], True),
+        (["/venv/bin/python3.13", "-m", "cvlab", "evaluate-resolutions"], True),
+        (
+            [
+                "systemd-inhibit",
+                "/venv/bin/python",
+                "-m",
+                "cvlab",
+                "evaluate-resolutions",
+            ],
+            False,
+        ),
+        (["bash", "-c", "python -m cvlab evaluate-resolutions"], False),
+        (
+            ["python", "-c", "wrapper code", "-m", "cvlab", "evaluate-resolutions"],
+            False,
+        ),
+    ],
+)
+def test_gpu_wait_matches_actual_jobs_not_wrappers(tmp_path, argv, expected):
+    from cvlab.inference_experiments import _is_cvlab_job
+
+    process = tmp_path / "123"
+    process.mkdir()
+    (process / "cmdline").write_bytes(("\0".join(argv) + "\0").encode())
+    assert _is_cvlab_job(123, tmp_path) is expected
+
+
+def test_gpu_wait_under_wrapper_does_not_wait_for_its_parent():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    child = "from cvlab.inference_experiments import wait_for_idle; wait_for_idle(.01); print('idle')"
+    wrapper = "import subprocess, sys; subprocess.run([sys.executable, '-c', sys.argv[1]], check=True)"
+    result = subprocess.run(
+        [sys.executable, "-c", wrapper, child, "-m", "cvlab", "evaluate-resolutions"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert result.stdout.strip() == "idle"
 
 
 @pytest.mark.parametrize("name", ["retinanet", "fcos", "fasterrcnn"])
