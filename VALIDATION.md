@@ -81,3 +81,6 @@ COCO evaluation розбито по класах і групах до 32 кад�
 ## Фіксовані ваги та інша роздільність інференсу
 
 Вісім цільових CPU-перевірок пройшли: відтворювана subset-вибірка зі spread усередині clips; очікування інших CLI jobs без очікування власного PID; відновлення ваг трьох CNN-детекторів із розміром 128→160 без зміни tensors та з реальним forward; збереження заборони resize для RT-DETR; наскрізне порівняння двох роздільностей на реальному training checkpoint синтетичного dataset; реальний глобальний flock для запобігання кільком очікувачам у різних output-каталогах. Зміни навчання не вносилися. Реальна користь 960→1280 на VisDrone і швидкість на GPU ще не вимірювалися.
+### CPU postprocessing alongside GPU jobs
+
+`tests/test_postprocess_experiments.py`: 15 CPU tests passed. They cover chunked JSON with Unicode and split numeric tokens, rejection of malformed/missing arrays, bounded reader allocation (<2 MiB on 30,000 streamed detections), class/image-specific NMS without input mutation, a known AP degradation from overly aggressive suppression, exact validation fingerprint checks, fold isolation, and a subprocess check that importing the module does not import Torch. Ruff checks pass for the new module and tests. No speed or AP improvement on VisDrone has been measured by these synthetic checks.

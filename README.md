@@ -263,6 +263,21 @@ python -u -m cvlab evaluate-resolutions \
 
 `--wait-gpu` чекає завершення поточних CVLab jobs до імпорту Torch та створення моделей. Поточна локальна черга розпізнає цей CLI-процес за префіксом evaluate та дочекається його завершення перед наступною моделлю. Глобальний lock користувача блокує дублювання таких очікувачів, зокрема з різними output-каталогами.
 
+### CPU-експеримент паралельно з GPU
+
+Збережений `val_predictions.json` дозволяє порівняти додатковий class-specific NMS без нового inference або завантаження моделі. Цей модуль не імпортує PyTorch. Manifest і прогнози читаються частинами; у RAM залишаються розмітка та не більше 500 детекцій на кожен вибраний кадр. Перевіряються IDs повного validation, fingerprint даних і конфігурація моделі. JSON результату містить також SHA-256 файла прогнозів.
+
+```bash
+nice -n 15 ionice -c 3 env CUDA_VISIBLE_DEVICES="" \
+  OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  python -u -m cvlab.postprocess_experiments \
+  --run "$CVLAB_LOCAL_WORK/runs/retinanet_fold0_local" \
+  --max-images 192 --nms 0.3 0.4 0.5 \
+  --out "$CVLAB_LOCAL_WORK/experiments/retinanet_nms_cpu.json"
+```
+
+Спочатку оцінюється вихідний набір детекцій, потім кожен NMS на тих самих кадрах. Це subset-порівняння: кандидата потрібно підтвердити на повному validation та інших folds. Додатковий NMS може лише видаляти вже збережені бокси; він не відновлює бокси, які модель відкинула під час inference. Такий експеримент не замінює навчання інших архітектур або обов'язкові зміни loss. Запуск пише окремий JSON і не змінює checkpoints, вихідні прогнози чи submission.
+
 ## Здача роботи
 
 Після отримання викладацького GitHub template пакет потрібно перенести до нього. README — інструкція запуску, не фінальний звіт. Ще потрібно виконати реальні навчання й tuning, аналіз failure cases, графіки порівняння, перевершити competition baseline, написати власний звіт і пройти захист. Для бонусу visualization потрібно додати W&B.
