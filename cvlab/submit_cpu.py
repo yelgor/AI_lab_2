@@ -47,13 +47,21 @@ def _cuda_budget(device, vram_gib):
     available = _available_ram_mib()
     if available is not None and available < 2048:
         raise RuntimeError("Less than 2 GiB RAM available; export not started")
-    free, total = torch.cuda.mem_get_info(device)
+    resolved = torch.device(device)
+    if resolved.type != "cuda":
+        raise ValueError("CUDA budget requires a CUDA device")
+    # torch 2.6 set_per_process_memory_fraction rejects torch.device('cuda')
+    # unless an explicit device index is supplied.
+    index = (
+        resolved.index if resolved.index is not None else torch.cuda.current_device()
+    )
+    free, total = torch.cuda.mem_get_info(index)
     budget = int(vram_gib * 1024**3)
     if budget >= total or free < budget + 512 * 1024**2:
         raise RuntimeError(
             "Insufficient free GPU memory for export budget plus 512 MiB margin"
         )
-    torch.cuda.set_per_process_memory_fraction(budget / total, device)
+    torch.cuda.set_per_process_memory_fraction(budget / total, index)
     print(
         f"PyTorch GPU budget={budget / 1024**2:.0f} MiB; free={free / 1024**2:.0f} MiB",
         flush=True,

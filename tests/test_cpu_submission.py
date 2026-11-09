@@ -121,33 +121,42 @@ def test_cpu_submission_rejects_duplicate_writer(tmp_path):
             create_submission(tmp_path / "unused", output)
 
 
-def test_gpu_budget_limits_only_export_allocator(monkeypatch):
+@pytest.mark.parametrize(
+    "device,expected_index", [("cuda", 0), ("cuda:0", 0), ("cuda:2", 2)]
+)
+def test_gpu_budget_limits_only_export_allocator(monkeypatch, device, expected_index):
     import torch
     from cvlab.submit_cpu import _cuda_budget
     from cvlab import submit_cpu
 
     monkeypatch.setattr(submit_cpu, "_available_ram_mib", lambda: 8192)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
 
     calls = []
     monkeypatch.setattr(
         torch.cuda, "mem_get_info", lambda device: (5 * 1024**3, 8 * 1024**3)
     )
-    monkeypatch.setattr(
-        torch.cuda,
-        "set_per_process_memory_fraction",
-        lambda fraction, device: calls.append((fraction, device)),
-    )
-    _cuda_budget("cuda", 1.5)
-    assert calls == [(1.5 / 8, "cuda")]
+
+    def set_fraction(fraction, selected):
+        # Exercise the real torch 2.6 argument validator that rejected the
+        # original unindexed device, while avoiding an actual GPU allocation.
+        from torch.cuda._utils import _get_device_index
+
+        assert _get_device_index(selected) == expected_index
+        calls.append((fraction, selected))
+
+    monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction", set_fraction)
+    _cuda_budget(device, 1.5)
+    assert calls == [(1.5 / 8, expected_index)]
     monkeypatch.setattr(
         torch.cuda, "mem_get_info", lambda device: (1024**3, 8 * 1024**3)
     )
     with pytest.raises(RuntimeError, match="Insufficient"):
-        _cuda_budget("cuda", 1.5)
+        _cuda_budget(device, 1.5)
     assert len(calls) == 1
     monkeypatch.setattr(submit_cpu, "_available_ram_mib", lambda: 1000)
     with pytest.raises(RuntimeError, match="Less than 2 GiB"):
-        _cuda_budget("cuda", 1.5)
+        _cuda_budget(device, 1.5)
 
 
 def test_gpu_submission_uses_fp16_and_applies_cap_before_loading(tmp_path, monkeypatch):

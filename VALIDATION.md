@@ -99,3 +99,6 @@ Five targeted tests passed: chunked output in exact template order, preservation
 ### GPU submission export budget
 
 The submission path supports a separate `predict-submission` CLI with FP16 CUDA inference, batch 1, zero loader workers and an explicit per-process PyTorch allocator limit. Seven targeted submission/end-to-end tests passed before the final RAM guard; the six focused submission tests also passed after adding it. Coverage includes allocator fraction, VRAM and RAM rejection before loading, FP16/cap wiring, and the existing actual CPU model/export flow. GPU budget checks use mocked CUDA APIs in this CPU-only workspace; actual concurrent GPU throughput and memory peaks remain to be measured on the user's laptop. No guarantee of reserving memory or protecting another process's future peak is made.
+### Indexed CUDA allocator device
+
+Eight focused submission tests pass. CUDA memory configuration resolves an unindexed `torch.device('cuda')` through `torch.cuda.current_device()` and passes an explicit integer index to memory APIs. Regression cases cover default, explicit zero and nonzero devices and invoke the real Torch 2.6 device-argument validator inside the mocked allocator call, reproducing the argument contract without GPU hardware. The earlier test mock accepted an unindexed device and missed this compatibility error.
