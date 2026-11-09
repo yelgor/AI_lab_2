@@ -247,6 +247,22 @@ Pinned memory, prefetch і non-blocking transfers підтримуються; ф
 
 Tiling/SAHI, tracking, ensembles, ONNX/TensorRT, DDP, W&B і автоматичний hyperparameter search ще не реалізовані. Додавати їх варто після вимірювання baseline. Паралельні незалежні навчання прискорюють серію експериментів, а не один inference.
 
+### Роздільність інференсу без перенавчання
+
+Для Faster R-CNN, RetinaNet та FCOS можна перевіряти інший `model.image_size` із тим самим checkpoint. Ваги, backbone topology й losses не змінюються; розмір застосовується і до letterbox, і до внутрішнього transform детектора. Для RT-DETR таке перевизначення залишається забороненим.
+
+```bash
+python -u -m cvlab evaluate-resolutions \
+  --config "$CVLAB_LOCAL_WORK/configs/retinanet_fold0_local.yaml" \
+  --checkpoint "$CVLAB_LOCAL_WORK/runs/retinanet_fold0_local/best.pt" \
+  --sizes 960 1280 --max-images 192 --wait-gpu \
+  --out "$CVLAB_LOCAL_WORK/experiments/retinanet_resolution_probe.json"
+```
+
+Це експрес-порівняння на одних і тих самих validation frames, рівномірно вибраних усередині sequences. JSON містить IDs, fingerprint вибірки, SHA-256 checkpoint, AP та timing кожного розміру. Результат subset не є повним validation mAP або OOF. Для повного validation вкажіть `--max-images` не менше кількості кадрів fold. Покращення роздільності потрібно підтверджувати метриками; воно не гарантується.
+
+`--wait-gpu` чекає завершення поточних CVLab jobs до імпорту Torch та створення моделей. Поточна локальна черга розпізнає цей CLI-процес за префіксом evaluate та дочекається його завершення перед наступною моделлю. Глобальний lock користувача блокує дублювання таких очікувачів, зокрема з різними output-каталогами.
+
 ## Здача роботи
 
 Після отримання викладацького GitHub template пакет потрібно перенести до нього. README — інструкція запуску, не фінальний звіт. Ще потрібно виконати реальні навчання й tuning, аналіз failure cases, графіки порівняння, перевершити competition baseline, написати власний звіт і пройти захист. Для бонусу visualization потрібно додати W&B.

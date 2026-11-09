@@ -245,6 +245,21 @@ def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     with pytest.raises(ValueError, match="protocol"):
         train(changed, resume=output / "last.pt")
     assert read_json(output / "config.json")["data"]["horizontal_flip"] == 0.5
+    from cvlab.inference_experiments import compare_resolutions
+
+    probe = compare_resolutions(
+        config,
+        output / "best.pt",
+        tmp_path / "probe.json",
+        sizes=(128, 160),
+        max_images=1,
+    )
+    assert probe["subset"] and len(probe["record_ids"]) == 1
+    assert [case["image_size"] for case in probe["experiments"]] == [128, 160]
+    assert len(probe["checkpoint_sha256"]) == 64
+    assert all(
+        case["metrics"]["coco100"]["mAP"] is not None for case in probe["experiments"]
+    )
 
 
 @pytest.mark.parametrize("interruption", ["validation", "metrics", "prediction_write"])

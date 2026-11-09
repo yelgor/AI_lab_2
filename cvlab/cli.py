@@ -38,6 +38,17 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    resolutions = commands.add_parser(
+        "evaluate-resolutions",
+        help="Compare inference sizes with a fixed checkpoint and validation subset",
+    )
+    resolutions.add_argument("--config", required=True)
+    resolutions.add_argument("--checkpoint", required=True)
+    resolutions.add_argument("--out", required=True)
+    resolutions.add_argument("--sizes", type=int, nargs="+", default=[960, 1280])
+    resolutions.add_argument("--max-images", type=int, default=192)
+    resolutions.add_argument("--wait-gpu", action="store_true")
+    resolutions.add_argument("--set", dest="overrides", action="append", default=[])
     for name in ("train", "evaluate", "predict", "benchmark"):
         sub = commands.add_parser(name)
         sub.add_argument("--config", required=True)
@@ -125,6 +136,17 @@ def main():
                 "predictions": predictions,
                 "model_config": model_config,
             },
+        )
+    elif args.command == "evaluate-resolutions":
+        from .inference_experiments import compare_resolutions
+
+        compare_resolutions(
+            config_for(args),
+            args.checkpoint,
+            args.out,
+            args.sizes,
+            args.max_images,
+            args.wait_gpu,
         )
     else:
         from .engine import load_trained, predict, setup, train

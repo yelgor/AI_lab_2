@@ -441,6 +441,10 @@ def load_trained(checkpoint_path, config, device):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     # Architecture and losses must match; precision/batch size may be benchmarked separately.
     inference_only = {"score_threshold", "nms_threshold", "max_detections"}
+    if checkpoint["config"]["model"]["name"] in {"fasterrcnn", "retinanet", "fcos"}:
+        # These CNN detectors have no learned parameters tied to input size.
+        # The new size is used by both letterbox and the detector transform.
+        inference_only.add("image_size")
     trained_architecture = {
         k: v
         for k, v in checkpoint["config"]["model"].items()
