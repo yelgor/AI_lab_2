@@ -1,0 +1,37 @@
+{
+  "target_public_score": 0.2216324580,
+  "observations": [
+    {
+      "file": "retinanet_fold0.csv",
+      "model": "retinanet",
+      "public_score": 0.1791370309,
+      "evidence": "User-provided Kaggle submission screenshot",
+      "baseline_exceeded": false
+    },
+    {
+      "file": "fasterrcnn_fold0_gpu.csv",
+      "model": "fasterrcnn",
+      "public_score": 0.1851657127,
+      "evidence": "User-provided Kaggle submission screenshot",
+      "baseline_exceeded": false
+    },
+    {
+      "file": "rtdetr_a7cd89fb349d_960.csv",
+      "model": "rtdetr",
+      "checkpoint_sha256_prefix": "a7cd89fb349d",
+      "image_size": 960,
+      "public_score": 0.1906104677,
+      "evidence": "User-provided Kaggle submission screenshot",
+      "baseline_exceeded": false
+    },
+    {
+      "file": "fasterrcnn_a4676a30f41d_960.csv",
+      "model": "fasterrcnn",
+      "checkpoint_sha256_prefix": "a4676a30f41d",
+      "image_size": 960,
+      "public_score": 0.1851681872,
+      "evidence": "User-provided Kaggle submission screenshot",
+      "baseline_exceeded": false
+    }
+  ]
+}

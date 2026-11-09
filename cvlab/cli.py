@@ -38,6 +38,18 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    tiles = commands.add_parser(
+        "evaluate-tiles",
+        help="Validate tiled inference and export an improved candidate",
+    )
+    tiles.add_argument("--work", required=True)
+    tiles.add_argument("--models", nargs="+", default=["rtdetr", "fasterrcnn"])
+    tiles.add_argument("--tile-sides", nargs="+", type=int, default=[768, 960])
+    tiles.add_argument("--ious", nargs="+", type=float, default=[0.5, 0.6])
+    tiles.add_argument("--max-images", type=int, default=192)
+    tiles.add_argument("--workers", type=int, default=2)
+    tiles.add_argument("--vram-gib", type=float, default=6)
+    tiles.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     score = commands.add_parser(
         "evaluate-score",
         help="Validate resolution improvements and export score candidates",
@@ -183,6 +195,19 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "evaluate-tiles":
+        from .tiled_search import run
+
+        run(
+            args.work,
+            args.models,
+            args.tile_sides,
+            args.ious,
+            args.max_images,
+            args.vram_gib,
+            args.workers,
+            args.lock_fd,
+        )
     elif args.command == "evaluate-score":
         from .score_improvement import run
 

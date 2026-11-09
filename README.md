@@ -334,6 +334,21 @@ python -u scripts/start_score_improvement.py \
 
 Результати знаходяться в `score_improvement/summary.json`; готові CSV — в `submissions/<model>_<checkpoint-sha>_<size>.csv`. Повний validation кешується з IDs та fingerprint. Ці official-val scores не замінюють попередні fold0/OOF scores і не порівнюються з ними як приріст. Kaggle score записаний як `null`, доки CSV не оцінено самим змаганням. Скрипт не використовує leaderboard для вибору розміру та не відправляє CSV автоматично. Повторний запуск захищений lock; записи поточної GPU черги захищені окремим work lease, який успадковується активним процесом.
 
+### Плитки для дрібних об'єктів
+
+Наступний inference-експеримент додає перекривні плитки до повного кадру. JPEG читається один раз на кадр, CPU workers готують наступні views паралельно з GPU. Workers передають uint8 tensors, а перетворення до `[0,1]` виконується на пристрої. Бокси повертаються з letterbox у координати crop, потім зміщуються в оригінальний кадр. Детекції, обрізані внутрішньою межею плитки, відкидаються; зовнішня межа оригіналу залишається допустимою. Повний кадр зберігає контекст великих об'єктів.
+
+```bash
+python -u scripts/start_tiled_search.py \
+  --work "$CVLAB_LOCAL_WORK" --models rtdetr fasterrcnn \
+  --tile-sides 768 960 --ious 0.5 0.6 \
+  --max-images 192 --workers 2 --vram-gib 6
+```
+
+Launcher чекає GPU lease, тому його можна поставити після поточного пошуку роздільності. Він використовує той самий заморожений checkpoint та розмір input, підтверджений попереднім сценарієм. Окремо порівнюються вихідний global inference, global + class-specific NMS та global + tiles + NMS на одних і тих самих 192 official-val кадрах. Далі переможець перевіряється на всій official val проти global inference; тестовий CSV створюється тільки при підтвердженому виграші. Початкова fold0-оцінка не підміняється цим holdout. Реальна швидкість враховує original frames/s, а не кількість плиток.
+
+Дублікати зливаються окремо для кожного класу; ліміт 500 застосовується до оригінального кадру після об'єднання всіх views. Прогнози об'єднуються по одному кадру, а тестовий CSV пишеться частинами з перевіркою порядку/IDs/координат і SHA checkpoint. `score_improvement/tiling_summary.json` містить всі абляції. Невдалі subset/full-validation варіанти теж зберігаються; новий CSV не створюється, якщо глобальний варіант кращий. `experiments/leaderboard_results.json` зберігає лише фактичні оцінки, надані користувачем, окремо від validation scores.
+
 ## Здача роботи
 
 Після отримання викладацького GitHub template пакет потрібно перенести до нього. README — інструкція запуску, не фінальний звіт. Ще потрібно виконати реальні навчання й tuning, аналіз failure cases, графіки порівняння, перевершити competition baseline, написати власний звіт і пройти захист. Для бонусу visualization потрібно додати W&B.
@@ -346,6 +361,7 @@ python -u scripts/start_score_improvement.py \
 - FCOS: https://arxiv.org/abs/1904.01355
 - GIoU: https://arxiv.org/abs/1902.09630
 - RT-DETR: https://arxiv.org/abs/2304.08069
+- Slicing inference idea (SAHI): https://arxiv.org/abs/2202.06934 ; the tile implementation here uses PyTorch/Pillow directly.
 - Transformers: https://huggingface.co/docs/transformers/v4.51.3/en/model_doc/rt_detr
 - COCO: https://github.com/cocodataset/cocoapi
 - VisDrone: https://arxiv.org/abs/2001.06303

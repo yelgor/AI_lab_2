@@ -145,7 +145,7 @@ def _compare(config, checkpoint, output, sizes, max_images):
         inference_config["loader"]["batch_size"] = 1
         device = setup(inference_config)
         print(
-            f"Resolution={size}; validation images={len(records)}; fixed checkpoint",
+            f"Model={config['model']['name']}; resolution={size}; validation images={len(records)}; fixed checkpoint",
             flush=True,
         )
         model = load_trained(checkpoint, inference_config, device)
@@ -156,7 +156,7 @@ def _compare(config, checkpoint, output, sizes, max_images):
         )
         write_json(output, report)
         print(
-            f"Resolution={size}: mAP={scores['coco100']['mAP']}; AP_small={scores['coco100']['AP_small']}",
+            f"Model={config['model']['name']}; resolution={size}: mAP={scores['coco100']['mAP']}; AP_small={scores['coco100']['AP_small']}",
             flush=True,
         )
         del predictions, model
