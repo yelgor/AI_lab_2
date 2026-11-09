@@ -67,6 +67,7 @@ def main():
     export.add_argument("--threads", type=int, default=2)
     export.add_argument("--chunk-size", type=int, default=16)
     export.add_argument("--vram-gib", type=float, default=1.5)
+    export.add_argument("--image-size", type=int)
     resolutions = commands.add_parser(
         "evaluate-resolutions",
         help="Compare inference sizes with a fixed checkpoint and validation subset",
@@ -176,6 +177,7 @@ def main():
             args.chunk_size,
             device_name=args.device,
             vram_gib=args.vram_gib,
+            image_size=args.image_size,
         )
     elif args.command == "train-overlap":
         from .overlap_queue import run

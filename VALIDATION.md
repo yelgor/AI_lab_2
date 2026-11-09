@@ -105,3 +105,6 @@ Eight focused submission tests pass. CUDA memory configuration resolves an unind
 ### Resolution candidates for the Kaggle baseline
 
 31 targeted tests passed across inference experiments, score improvement, and chunked submissions. They include a real RT-DETR forward at a different input size with exact weight preservation, rejection of static/missing RT-DETR metadata, frozen checkpoint provenance, official-holdout leakage rejection, native CSV exports before search, full-validation rejection of a subset winner, OOM fallback, cached full-validation reuse, and inherited GPU-lease / duplicate-launch checks. Existing CPU export and GPU-budget unit tests also pass. These CPU tests do not measure a VisDrone AP gain or a Kaggle score.
+### Score-export resolution compatibility regression
+
+38 targeted tests passed across chunked export, score improvement, and inference resolution. Added an integration check that calls `score_improvement.export` through the real `create_submission`, verifies the requested image size reaches loading/prediction and CSV provenance, and confirms the saved training config is unchanged. Invalid sizes fail before model setup, and the `predict-submission --image-size` CLI forwards the override. This covers the previously missed exporter keyword mismatch.

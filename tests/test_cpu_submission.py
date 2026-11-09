@@ -196,3 +196,80 @@ def test_gpu_submission_uses_fp16_and_applies_cap_before_loading(tmp_path, monke
         run, tmp_path / "gpu.csv", device_name="cuda", vram_gib=1.5
     )
     assert checked["valid"] and checked["images"] == 3
+
+
+def test_score_export_calls_real_exporter_with_requested_resolution(
+    tmp_path, monkeypatch
+):
+    from cvlab import engine, score_improvement, submit_cpu
+    from cvlab.common import read_json
+
+    run = fixture_run(tmp_path)
+    config = read_json(run / "config.json")
+    config["model"]["image_size"] = 960
+    write_json(run / "config.json", config)
+    sha = score_improvement.file_hash(run / "best.pt")
+    monkeypatch.setattr(engine, "setup", lambda config: "cuda")
+    monkeypatch.setattr(submit_cpu, "_cuda_budget", lambda *a: None)
+    sizes = []
+
+    def load(path, actual_config, device):
+        sizes.append(actual_config["model"]["image_size"])
+        assert actual_config["runtime"]["precision"] == "fp16"
+        return object()
+
+    def predict(model, actual_config, records, device):
+        assert actual_config["model"]["image_size"] == 1280
+        return [
+            {"image_id": r["id"], "category_id": 1, "score": 0.9, "bbox": [1, 2, 3, 4]}
+            for r in records
+        ], {}
+
+    monkeypatch.setattr(engine, "load_trained", load)
+    monkeypatch.setattr(engine, "predict", predict)
+    output = tmp_path / "candidate.csv"
+    score_improvement.export(run, config, sha, 1280, output, 4)
+    assert sizes == [1280]
+    metadata = read_json(output.with_suffix(".csv.metadata.json"))
+    assert metadata["inference_config"]["model"]["image_size"] == 1280
+    assert metadata["checkpoint_sha256"] == sha
+    assert metadata["validation"]["valid"]
+    assert read_json(run / "config.json")["model"]["image_size"] == 960
+
+
+@pytest.mark.parametrize("size", [32, 129, -96, 128.0, True])
+def test_export_rejects_invalid_resize_before_model_setup(tmp_path, monkeypatch, size):
+    from cvlab import engine
+
+    run = fixture_run(tmp_path)
+    monkeypatch.setattr(
+        engine, "setup", lambda *a: pytest.fail("Setup reached for invalid size")
+    )
+    with pytest.raises(ValueError, match="image_size"):
+        create_submission(run, tmp_path / "bad.csv", image_size=size)
+
+
+def test_submission_cli_passes_image_size_to_exporter(monkeypatch, tmp_path):
+    import sys
+    from cvlab import cli, submit_cpu
+
+    calls = []
+    monkeypatch.setattr(
+        submit_cpu, "create_submission", lambda *a, **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cvlab",
+            "predict-submission",
+            "--run",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "out.csv"),
+            "--image-size",
+            "1536",
+        ],
+    )
+    cli.main()
+    assert calls[0]["image_size"] == 1536

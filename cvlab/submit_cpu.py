@@ -15,7 +15,13 @@ from .common import digest, read_json, write_json
 
 
 def create_submission(
-    run, output, threads=4, chunk_size=16, device_name="cpu", vram_gib=None
+    run,
+    output,
+    threads=4,
+    chunk_size=16,
+    device_name="cpu",
+    vram_gib=None,
+    image_size=None,
 ):
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -27,7 +33,7 @@ def create_submission(
                 f"Submission generation already running: {output}"
             ) from None
         return _create_submission(
-            run, output, threads, chunk_size, device_name, vram_gib
+            run, output, threads, chunk_size, device_name, vram_gib, image_size
         )
 
 
@@ -68,7 +74,9 @@ def _cuda_budget(device, vram_gib):
     )
 
 
-def _create_submission(run, output, threads, chunk_size, device_name, vram_gib):
+def _create_submission(
+    run, output, threads, chunk_size, device_name, vram_gib, image_size=None
+):
     if threads < 1 or chunk_size < 1:
         raise ValueError("threads and chunk_size must be positive")
     if device_name not in {"cpu", "cuda"}:
@@ -82,6 +90,15 @@ def _create_submission(run, output, threads, chunk_size, device_name, vram_gib):
     from scripts.check_lab import validate_submission
 
     config = copy.deepcopy(read_json(run / "config.json"))
+    if image_size is not None:
+        if (
+            not isinstance(image_size, int)
+            or isinstance(image_size, bool)
+            or image_size < 64
+            or image_size % 32
+        ):
+            raise ValueError("image_size must be an integer multiple of 32, >=64")
+        config["model"]["image_size"] = image_size
     config["runtime"].update(
         device=device_name,
         precision="fp16" if device_name == "cuda" else "fp32",
