@@ -18,10 +18,10 @@ def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False),
-        encoding="utf-8",
-    )
+    # Large validation outputs must not create a full JSON string and a second
+    # UTF-8 copy in RAM. Keep the atomic replacement after a successful write.
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
     temporary.replace(path)
 
 
@@ -34,7 +34,12 @@ def load_config(path):
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    # Match the existing fingerprint byte for byte, without materializing the
+    # entire encoded manifest (millions of boxes) during checkpoint recovery.
+    hasher = hashlib.sha256()
+    for chunk in json.JSONEncoder(sort_keys=True).iterencode(value):
+        hasher.update(chunk.encode())
+    return hasher.hexdigest()
 
 
 def protocol_fingerprint(config):

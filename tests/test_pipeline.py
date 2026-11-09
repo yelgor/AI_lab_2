@@ -247,7 +247,10 @@ def test_training_checkpoint_evaluation_submission(competition, tmp_path):
     assert read_json(output / "config.json")["data"]["horizontal_flip"] == 0.5
 
 
-def test_resume_matches_uninterrupted_training(competition, tmp_path, monkeypatch):
+@pytest.mark.parametrize("interruption", ["validation", "prediction_write"])
+def test_resume_matches_uninterrupted_training(
+    competition, tmp_path, monkeypatch, interruption
+):
     from cvlab.common import load_config
     from cvlab import engine
 
@@ -265,7 +268,7 @@ def test_resume_matches_uninterrupted_training(competition, tmp_path, monkeypatc
         Path(config["output"]) / "last.pt", map_location="cpu", weights_only=False
     )
     config["output"] = str(tmp_path / "interrupted")
-    real_predict, calls = engine.predict, []
+    real_predict, real_write_json, calls = engine.predict, engine.write_json, []
 
     def interrupt_second_validation(*args, **kwargs):
         calls.append(1)
@@ -273,11 +276,26 @@ def test_resume_matches_uninterrupted_training(competition, tmp_path, monkeypatc
             raise RuntimeError("simulated runtime disconnection")
         return real_predict(*args, **kwargs)
 
-    monkeypatch.setattr(engine, "predict", interrupt_second_validation)
+    def interrupt_prediction_write(path, value):
+        if Path(path).name == "val_predictions.json":
+            Path(path).with_suffix(".json.tmp").touch()
+            raise RuntimeError("simulated failure after checkpoint save")
+        return real_write_json(path, value)
+
+    if interruption == "validation":
+        monkeypatch.setattr(engine, "predict", interrupt_second_validation)
+    else:
+        monkeypatch.setattr(engine, "write_json", interrupt_prediction_write)
     with pytest.raises(RuntimeError, match="simulated"):
         engine.train(config)
+    output = Path(config["output"])
+    assert (output / "last.pt").is_file()
+    if interruption == "prediction_write":
+        assert (output / "best.pt").is_file()
+        assert not (output / "val_predictions.json").exists()
     monkeypatch.setattr(engine, "predict", real_predict)
-    engine.train(config, resume=Path(config["output"]) / "last.pt")
+    monkeypatch.setattr(engine, "write_json", real_write_json)
+    engine.train(config, resume=output / "last.pt")
     resumed = torch.load(
         Path(config["output"]) / "last.pt", map_location="cpu", weights_only=False
     )
@@ -287,6 +305,36 @@ def test_resume_matches_uninterrupted_training(competition, tmp_path, monkeypatc
         )
     assert full["scheduler"] == resumed["scheduler"]
     assert full["epoch"] == resumed["epoch"] == 1
+    assert len((output / "history.jsonl").read_text().splitlines()) == 2
+    if interruption == "prediction_write":
+        import sys
+        import yaml
+        from cvlab.cli import main
+
+        # Rebuild a missing validation artifact from best.pt after recovery,
+        # using the same CLI as the local restart instructions.
+        config_path = tmp_path / "recovery.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "cvlab",
+                "evaluate",
+                "--config",
+                str(config_path),
+                "--checkpoint",
+                str(output / "best.pt"),
+                "--out",
+                str(output / "val_predictions.json"),
+            ],
+        )
+        main()
+        result = read_json(output / "val_predictions.json")
+        assert result["record_ids"] == [
+            record["id"] for record in select_records(config, "val")
+        ]
+        assert result["metrics"]["coco100"]["mAP"] is not None
 
 
 @pytest.mark.parametrize(

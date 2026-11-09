@@ -275,6 +275,9 @@ def train(config, resume=None):
             checkpoint["best"],
             checkpoint["elapsed_seconds"],
         )
+        # State has been restored to the model/optimizer. Release the CPU copy
+        # loaded from last.pt before training and validation allocate more RAM.
+        checkpoint = None
     write_json(output / "config.json", config)
     write_json(output / "environment.json", environment())
     write_json(
@@ -331,6 +334,7 @@ def train(config, resume=None):
         if not observed:
             break
         scheduler.step()
+        print(f"epoch={epoch} training complete; running validation", flush=True)
         predictions, timing = predict(model, config, validation, device)
         scores = evaluate(
             validation, predictions, config["evaluation"]["max_detections"]
@@ -384,6 +388,8 @@ def train(config, resume=None):
                     "data_fingerprint": digest(validation),
                 },
             )
+        # Do not retain one full validation output while collecting the next.
+        del predictions
         print(
             f"epoch={epoch} loss={total_loss / observed:.4f} mAP={score:.4f} best={best:.4f}",
             flush=True,

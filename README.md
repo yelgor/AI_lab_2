@@ -154,6 +154,20 @@ python -m cvlab benchmark --config configs/fcos.yaml --checkpoint runs/fcos_fold
 
 Resume вимагає незмінного протоколу та `last.pt` у поточному output. Відновлюється збережена межа епохи; незбережені batches повторно не відновлюються. `persistent_workers=false` збережено для відтворення worker RNG між епохами. Побітова ідентичність на різному обладнанні не гарантується; strict deterministic режим опційний і може відхилити недетерміновану CUDA-операцію. Завантажуйте лише власні `.pt`.
 
+Якщо Linux завершив Python через RAM OOM, а `last.pt` збережений, використайте resume з тією самою конфігурацією. Накопичений час бюджету відновлюється з checkpoint. Зменшення batch або зміна workers змінюють протокол і відхиляються під час strict resume; спочатку звільніть RAM від зайвих програм.
+
+JSON записується потоково в тимчасовий файл із подальшим atomic rename. Хеші manifests також обчислюються потоково зі збереженням попередніх fingerprints. Після валідації масив predictions звільняється перед наступною епохою. Повні predictions і COCO evaluation усе ще потребують RAM.
+
+Checkpoints записуються до `val_predictions.json`. Якщо процес обірвався при записі JSON, після відновлення навчання відтворіть відсутній або незавершений artifact із `best.pt`:
+
+```bash
+if [ -e runs/fcos_fold0/val_predictions.json.tmp ] || [ ! -s runs/fcos_fold0/val_predictions.json ]; then
+  python -m cvlab evaluate --config configs/fcos.yaml --checkpoint runs/fcos_fold0/best.pt --out runs/fcos_fold0/val_predictions.json
+fi
+```
+
+Цей крок повторює inference і підрахунок метрик validation для найкращих ваг. Дані повторно готувати не потрібно.
+
 Після вибору конфігурації можна навчити окремий run на всьому `train` із перевіркою на офіційному `val`:
 
 ```bash
