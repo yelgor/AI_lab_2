@@ -38,6 +38,16 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    crops = commands.add_parser(
+        "train-crops", help="Warm fine-tuning on all train clips with native crops"
+    )
+    crops.add_argument("--work", required=True)
+    crops.add_argument("--models", nargs="+", default=["rtdetr"])
+    crops.add_argument("--hours", type=float, default=2)
+    crops.add_argument("--epochs", type=int, default=4)
+    crops.add_argument("--lr", type=float, default=5e-5)
+    crops.add_argument("--crop-size", type=int, default=768)
+    crops.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     tiles = commands.add_parser(
         "evaluate-tiles",
         help="Validate tiled inference and export an improved candidate",
@@ -99,10 +109,16 @@ def main():
             "--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE"
         )
         if name == "train":
-            sub.add_argument(
+            initialization = sub.add_mutually_exclusive_group()
+            initialization.add_argument(
                 "--resume",
                 help="Resume from your own last.pt; epoch-boundary continuation",
             )
+            initialization.add_argument(
+                "--init-checkpoint",
+                help="Warm weights with a fresh optimizer/budget; source training clips must not overlap validation",
+            )
+            sub.add_argument("--async-metrics", action="store_true")
         else:
             sub.add_argument("--checkpoint", required=True)
             sub.add_argument("--out", required=True)
@@ -196,6 +212,18 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "train-crops":
+        from .crop_finetune import run
+
+        run(
+            args.work,
+            args.models,
+            args.hours,
+            args.epochs,
+            args.lr,
+            args.crop_size,
+            args.lock_fd,
+        )
     elif args.command == "evaluate-tiles":
         from .tiled_search import run
 
@@ -240,7 +268,18 @@ def main():
 
         config = config_for(args)
         if args.command == "train":
-            train(config, args.resume)
+            if args.async_metrics:
+                from .validation_pipeline import ValidationPipeline
+
+                with ValidationPipeline() as pipeline:
+                    train(
+                        config,
+                        args.resume,
+                        validation_pipeline=pipeline,
+                        init_checkpoint=args.init_checkpoint,
+                    )
+            else:
+                train(config, args.resume, init_checkpoint=args.init_checkpoint)
             return
         device = setup(config)
         records = select_records(config, "test" if args.command == "predict" else "val")

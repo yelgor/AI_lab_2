@@ -368,3 +368,41 @@ Launcher чекає GPU lease, тому його можна поставити �
 - PyTorch wheels: https://pytorch.org/get-started/previous-versions/
 
 Дотримуйтеся ліцензій бібліотек, pretrained weights і competition data.
+
+### Warm fine-tuning with native crops
+
+`scripts/start_crop_finetune.py --work "$WORK" --models rtdetr --hours 2`
+queues a separate experiment after an already queued tiled search and the current
+GPU owner. Duplicate launchers exit. Keep the existing `systemd-inhibit`/`nohup`
+wrapper when running overnight; the Python launcher itself stays in the foreground.
+
+The recipe initializes from `runs/rtdetr_fold0_local/best.pt`, with a fresh optimizer,
+scheduler and time budget, while preserving the model architecture and input size.
+It uses all official train clips, every second frame within each clip, learning rate
+`5e-5`, batch 1 with accumulation 4, and two loader workers. Half of the training
+examples use a native 768-pixel crop centered near an object sampled uniformly by
+present class; the rest use the whole frame. Ignored areas are masked first, and
+crop boxes are clipped with their labels. Validation and test frames are never cropped
+by this training option. These changes form a combined experiment; attributing a gain
+to one component requires separate ablations.
+
+Before any optimizer update, the source weights are measured on the complete official
+validation split and saved as the initial best. Fold-validation scores are not reused
+as that threshold. Source training-sequence lineage is checked against the new holdout;
+legacy checkpoints require their matching `split.json`. Source weights are preserved.
+The new output is `runs/rtdetr_crop_finetune`; CPU COCO metrics can overlap the next
+training epoch, with the existing host-memory gate. The two-hour budget includes initial
+validation and training; final validation and CSV export can extend wall time beyond it.
+
+Repeating the same command resumes the new run's `last.pt`; it does not reset the budget.
+The summary is `crop_finetune_summary.json`. A native-resolution CSV is automatically
+exported only after at least `0.01` absolute COCO100 mAP improvement over initialization
+on the same full official validation split. This threshold saves export work; it does
+not predict Kaggle improvement. The output log then prints `CROP CANDIDATE READY FOR KAGGLE`.
+The target public baseline remains `0.2216324580`; training this recipe has not yet
+established that score. This official-split experiment does not replace sequence-fold
+OOF evaluation required for the assignment.
+
+For a custom new experiment, `cvlab train --config ... --init-checkpoint ... --async-metrics`
+exposes the same warm initialization. `--init-checkpoint` and `--resume` are mutually
+exclusive; resume keeps the saved configuration and experiment protocol.

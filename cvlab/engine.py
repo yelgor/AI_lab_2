@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -204,7 +205,9 @@ def atomic_checkpoint(path, checkpoint):
     temporary.replace(path)
 
 
-def train(config, resume=None, validation_pipeline=None):
+def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
+    if resume and init_checkpoint:
+        raise ValueError("Use resume or init_checkpoint, not both")
     device = setup(config)
     output = Path(config["output"])
     if resume and Path(resume).resolve() != (output / "last.pt").resolve():
@@ -216,15 +219,6 @@ def train(config, resume=None, validation_pipeline=None):
             f"Run directory already exists: {output}. Choose a new output or use --resume."
         )
     output.mkdir(parents=True, exist_ok=True)
-    if validation_pipeline is not None:
-        write_json(
-            output / "execution.json",
-            {
-                "validation_mode": "CPU metrics overlapped with GPU training",
-                "max_cpu_validation_jobs": 1,
-                "wall_clock_budget_includes_overlap": True,
-            },
-        )
     training, validation = (
         select_records(config, "train"),
         select_records(config, "val"),
@@ -234,13 +228,62 @@ def train(config, resume=None, validation_pipeline=None):
     data_hash = digest({"train": training, "val": validation})
     construction = dict(config["model"])
     checkpoint = None
+    initialization = None
+    seen_sequences = set()
     if resume:
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
+        initialization = checkpoint.get("initialization")
+        seen_sequences = set(
+            checkpoint.get(
+                "seen_training_sequences", [r["sequence_id"] for r in training]
+            )
+        )
+    elif init_checkpoint:
+        with Path(init_checkpoint).open("rb") as stream:
+            source_hash = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                source_hash.update(chunk)
+            stream.seek(0)
+            checkpoint = torch.load(stream, map_location="cpu", weights_only=False)
+        if checkpoint["config"]["model"]["name"] != config["model"]["name"]:
+            raise ValueError("Initialization must use the same detector family")
+        if checkpoint["config"]["model"] != config["model"]:
+            raise ValueError(
+                "Warm initialization keeps model configuration unchanged; vary data/train settings"
+            )
+        if "seen_training_sequences" in checkpoint:
+            seen_sequences = set(checkpoint["seen_training_sequences"])
+        else:
+            source_split = Path(init_checkpoint).parent / "split.json"
+            if not source_split.is_file():
+                raise ValueError(
+                    "Initialization needs source split.json to verify sequence leakage"
+                )
+            source_split = json.loads(source_split.read_text())
+            if source_split["fingerprint"] != checkpoint["data_fingerprint"]:
+                raise ValueError(
+                    "Source split fingerprint differs from initialization checkpoint"
+                )
+            seen_sequences = set(source_split["train_sequences"])
+        if seen_sequences & {record["sequence_id"] for record in validation}:
+            raise ValueError(
+                "Initialization would leak supervised training sequences into validation"
+            )
+        initialization = {
+            "checkpoint": str(Path(init_checkpoint).resolve()),
+            "sha256": source_hash.hexdigest(),
+            "source_epoch": checkpoint["epoch"],
+            "source_best_score": checkpoint["best"],
+            "fresh_optimizer_schedule_budget": True,
+        }
     model = build_model(
         construction,
         checkpoint.get("adapter") if checkpoint else None,
-        initialize_pretrained=not bool(resume),
+        initialize_pretrained=not bool(resume or init_checkpoint),
     ).to(device)
+    if init_checkpoint:
+        model.load_state_dict(checkpoint["model"])
+        checkpoint = None
     backbone, heads = [], []
     for name, parameter in model.named_parameters():
         if parameter.requires_grad:
@@ -289,6 +332,17 @@ def train(config, resume=None, validation_pipeline=None):
         # State has been restored to the model/optimizer. Release the CPU copy
         # loaded from last.pt before training and validation allocate more RAM.
         checkpoint = None
+    if validation_pipeline is not None:
+        write_json(
+            output / "execution.json",
+            {
+                "validation_mode": "CPU metrics overlapped with GPU training",
+                "max_cpu_validation_jobs": 1,
+                "wall_clock_budget_includes_overlap": True,
+            },
+        )
+    if initialization:
+        write_json(output / "initialization.json", initialization)
     write_json(output / "config.json", config)
     write_json(output / "environment.json", environment())
     write_json(
@@ -324,7 +378,50 @@ def train(config, resume=None, validation_pipeline=None):
             "elapsed_seconds": elapsed_before + time.perf_counter() - started,
             "data_fingerprint": data_hash,
             "validation_pending": progress,
+            "initialization": initialization,
+            "seen_training_sequences": sorted(seen_sequences),
         }
+
+    if (
+        initialization
+        and start_epoch == 0
+        and (
+            not (output / "initial_validation.json").is_file()
+            or not (output / "best.pt").is_file()
+        )
+    ):
+        atomic_checkpoint(output / "last.pt", snapshot(-1))
+        print(
+            "Evaluating initialization on the new validation split before fine-tuning",
+            flush=True,
+        )
+        initial_predictions, initial_timing = predict(
+            model, config, validation, device, worker_context=worker_context
+        )
+        initial_scores = evaluate(
+            validation, initial_predictions, config["evaluation"]["max_detections"]
+        )
+        initial_score = initial_scores["coco100"]["mAP"]
+        if initial_score is None:
+            raise ValueError("Initial validation has no evaluable targets")
+        best = initial_score
+        initial_log = {
+            "epoch": -1,
+            "train_loss": None,
+            "train_batches": 0,
+            "epoch_complete": True,
+            "elapsed_seconds": elapsed_before + time.perf_counter() - started,
+            "metrics": initial_scores,
+            "timing": initial_timing,
+            "lr": [group["lr"] for group in optimizer.param_groups],
+        }
+        initial_payload = snapshot(-1)
+        atomic_checkpoint(output / "last.pt", initial_payload)
+        atomic_checkpoint(output / "best.pt", initial_payload)
+        write_json(output / "best_metrics.json", initial_log)
+        write_json(output / "initial_validation.json", initial_log)
+        del initial_predictions, initial_payload
+        print(f"Initial official-validation mAP={best:.4f}", flush=True)
 
     validation_job = None
     for epoch in range(start_epoch, tc["epochs"]):
@@ -341,7 +438,7 @@ def train(config, resume=None, validation_pipeline=None):
             batches = min(len(loader), tc.get("max_batches_per_epoch") or len(loader))
             total_loss, observed, stop = 0.0, 0, False
             print(f"epoch={epoch} training; up to {batches} batches", flush=True)
-            for index, (images, targets, _) in enumerate(loader):
+            for index, (images, targets, metadata) in enumerate(loader):
                 if index >= batches:
                     break
                 images, targets = move(images, targets, device)
@@ -357,6 +454,9 @@ def train(config, resume=None, validation_pipeline=None):
                 scaler.scale(loss / group_size).backward()
                 total_loss += loss.item()
                 observed += 1
+                seen_sequences.update(
+                    meta["record"]["sequence_id"] for meta in metadata
+                )
                 if observed % 250 == 0:
                     print(
                         f"epoch={epoch} batch={observed}/{batches} mean_loss={total_loss / observed:.4f}",

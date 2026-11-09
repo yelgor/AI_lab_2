@@ -114,3 +114,20 @@ Eight focused submission tests pass. CUDA memory configuration resolves an unind
 ### Minimum useful tiling gain
 
 51 targeted tests passed after adding `--min-gain` (default 0.01 absolute mAP) before tiled test export. Tests distinguish a loss, a positive but small 0.003 gain, an exact 0.01 boundary and a larger improvement. Metrics/caches remain available when export is skipped. This is a compute-budget rule, not a predicted Kaggle gain.
+
+### Crop fine-tuning and checkpoint initialization
+
+Full CPU regression suite: **175 passed**, with 14 existing Matplotlib/Pyparsing
+warnings. Ruff and training CLI help checks pass. New tests execute the real training,
+optimizer/checkpoint and asynchronous-finalization paths with a tiny detector: source
+weight preservation, fresh optimizer and lower LR, new-holdout initialization score,
+completed-run resume without the old source file, interrupted initial-validation
+recovery, legacy split fingerprint verification, and rejection of supervised sequence
+leakage or model-configuration changes. Additional checks cover native crop geometry,
+label alignment, validation isolation, legacy spawned datasets, all-train-clip sampling,
+real controller-to-engine integration, no export on a tied score, duplicate launcher
+rejection and inherited GPU lease after the tiling dependency. The existing real
+TorchVision/RT-DETR inference, resume, submission and overlap tests also passed.
+
+These checks establish software behavior on CPU. No CUDA training throughput, laptop
+peak memory or VisDrone/Kaggle improvement for this crop recipe was measured here.
