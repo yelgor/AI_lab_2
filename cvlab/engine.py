@@ -258,6 +258,7 @@ def train(
     round_batches=None,
     warm_optimizer=False,
     initial_validation_cache=None,
+    round_seconds=None,
 ):
     if (warm_optimizer or initial_validation_cache is not None) and not init_checkpoint:
         raise ValueError("Warm optimizer/cache require an initialization checkpoint")
@@ -267,6 +268,10 @@ def train(
         raise ValueError("round_batches must be a positive integer")
     if resume and init_checkpoint:
         raise ValueError("Use resume or init_checkpoint, not both")
+    if round_seconds is not None and (
+        not math.isfinite(round_seconds) or round_seconds <= 0
+    ):
+        raise ValueError("round_seconds must be finite and positive")
     device = setup(config)
     output = Path(config["output"])
     if resume and Path(resume).resolve() != (output / "last.pt").resolve():
@@ -278,10 +283,15 @@ def train(
             f"Run directory already exists: {output}. Choose a new output or use --resume."
         )
     output.mkdir(parents=True, exist_ok=True)
-    training, validation = (
-        select_records(config, "train"),
-        select_records(config, "val"),
-    )
+    training = select_records(config, "train")
+    from .sequential_policy import validation_records, per_video_scores
+
+    validation = validation_records(config, training)
+    if config["evaluation"].get("validation_images"):
+        print(
+            f"Fixed validation probe: {len(validation)} frames; full training split preserved",
+            flush=True,
+        )
     if {r["sequence_id"] for r in training} & {r["sequence_id"] for r in validation}:
         raise ValueError("Sequence leakage between train and validation")
     data_hash = digest({"train": training, "val": validation})
@@ -350,6 +360,10 @@ def train(
                 == config["loader"]["batch_size"]
                 and checkpoint["config"]["evaluation"]["max_detections"]
                 == config["evaluation"]["max_detections"]
+                and (
+                    not config["evaluation"].get("per_video_metrics")
+                    or "per_video_mAP" in initial_validation_cache["metrics"]
+                )
             )
             if not compatible:
                 raise ValueError(
@@ -483,6 +497,7 @@ def train(
             "execution": {
                 "round_batches": round_batches,
                 "yield_after_epoch": yield_after_epoch,
+                "round_seconds": round_seconds,
             },
         }
 
@@ -506,6 +521,10 @@ def train(
             initial_scores = evaluate(
                 validation, initial_predictions, config["evaluation"]["max_detections"]
             )
+            if config["evaluation"].get("per_video_metrics"):
+                initial_scores["per_video_mAP"] = per_video_scores(
+                    validation, initial_predictions
+                )
         else:
             initial_predictions = None
             initial_timing = {
@@ -604,9 +623,11 @@ def train(
                             )
                             stop = True
                             break
-                    if (
-                        elapsed_before + time.perf_counter() - started
-                        >= tc["max_hours"] * 3600
+                    if elapsed_before + time.perf_counter() - started >= tc[
+                        "max_hours"
+                    ] * 3600 or (
+                        round_seconds is not None
+                        and time.perf_counter() - started >= round_seconds
                     ):
                         stop = True
                         break
@@ -678,6 +699,8 @@ def train(
         scores = evaluate(
             validation, predictions, config["evaluation"]["max_detections"]
         )
+        if config["evaluation"].get("per_video_metrics"):
+            scores["per_video_mAP"] = per_video_scores(validation, predictions)
         score = scores["coco100"]["mAP"]
         if score is None:
             raise ValueError("Validation has no evaluable target objects")

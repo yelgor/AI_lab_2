@@ -197,3 +197,12 @@ official confirmation leakage rejection and launcher/CLI lease forwarding. Ruff,
 launch-shell checks pass. These are CPU behavior checks; the policy has no new measured
 CUDA training speed or Kaggle gain yet. The observed `3ae5fa3a569c` score `0.182472636`
 is recorded as another regression against the original public-best result.
+# Efficient-search validation
+
+`tests/test_efficient_search.py` checks paired flight-family evidence, cost-based
+allocation, exclusion of related training excerpts, capped validation with the
+full training fold retained, optimizer continuation in serial/asynchronous
+validation, interruption recovery without repeated training, immutable earlier
+checkpoints, reuse across search cycles, and launcher/CLI GPU-lease handling.
+These CPU checks validate the controller; they do not establish a Kaggle gain.
+

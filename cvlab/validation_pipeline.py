@@ -31,6 +31,10 @@ def finish_validation(
     epoch = payload["epoch"]
     print(f"epoch={epoch} CPU metrics running; GPU may continue training", flush=True)
     scores = evaluate(records, predictions, config["evaluation"]["max_detections"])
+    if config["evaluation"].get("per_video_metrics"):
+        from .sequential_policy import per_video_scores
+
+        scores["per_video_mAP"] = per_video_scores(records, predictions)
     score = scores["coco100"]["mAP"]
     if score is None:
         raise ValueError("Validation has no evaluable target objects")

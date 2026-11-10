@@ -559,3 +559,16 @@ verified original champion, reduces LR and preserves all previous trials if exte
 feedback invalidates a branch. A `STOP` file in `runs/rtdetr_adaptive_finetune/` prevents
 further trials/exports at the next controller boundary. Repeating the launcher continues
 from its saved state, with duplicate-launch and GPU-lease protection.
+# Efficient continuation from the verified public-best checkpoint
+
+Use `scripts/start_efficient_search.py` for bounded LR racing rather than a long
+unobserved fine-tune. It warm-starts the verified RT-DETR weights and optimizer,
+compares three LRs at cumulative 6k/12k/24k-frame budgets, and preserves every
+measured checkpoint. A 512-frame probe uses unseen video families; only promising
+candidates receive full native and tiled confirmation before CSV export.
+The original public-best run is preserved. The GPU launcher waits for current
+work, and the default four-hour allowance includes a one-hour confirmation
+reserve (a soft limit; active validation/export completes).
+
+See [the mathematical policy and commands](experiments/efficient_search.md).
+

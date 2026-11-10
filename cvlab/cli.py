@@ -38,6 +38,19 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    efficient = commands.add_parser(
+        "train-efficient",
+        help="Budgeted warm-start LR racing with video-level evidence",
+    )
+    efficient.add_argument("--work", required=True)
+    efficient.add_argument("--hours", type=float, default=4)
+    efficient.add_argument("--reserve-hours", type=float, default=1)
+    efficient.add_argument("--cycles", type=int, default=1)
+    efficient.add_argument("--budgets", nargs=3, type=int, default=[6000, 12000, 24000])
+    efficient.add_argument("--probe-images", type=int, default=512)
+    efficient.add_argument("--export-tiles", action="store_true")
+    efficient.add_argument("--reset-to-original", action="store_true")
+    efficient.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     adaptive = commands.add_parser(
         "train-adaptive",
         help="Train short challengers, rollback and reduce LR on rejection",
@@ -251,6 +264,20 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "train-efficient":
+        from .efficient_search import run
+
+        run(
+            args.work,
+            args.lock_fd,
+            hours=args.hours,
+            reserve_hours=args.reserve_hours,
+            cycles=args.cycles,
+            budgets=args.budgets,
+            probe_images=args.probe_images,
+            export_tiles=args.export_tiles,
+            reset_to_original=args.reset_to_original,
+        )
     elif args.command == "train-adaptive":
         from .adaptive_finetune import run
 
