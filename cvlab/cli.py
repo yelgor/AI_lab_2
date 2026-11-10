@@ -38,6 +38,16 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    adaptive = commands.add_parser(
+        "train-adaptive",
+        help="Train short challengers, rollback and reduce LR on rejection",
+    )
+    adaptive.add_argument("--work", required=True)
+    adaptive.add_argument("--attempts", type=int, default=3)
+    adaptive.add_argument("--batches", type=int, default=6000)
+    adaptive.add_argument("--export-tiles", action="store_true")
+    adaptive.add_argument("--reset-to-original", action="store_true")
+    adaptive.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     cont = commands.add_parser(
         "train-iterate",
         help="Train saved best weights in bounded rounds with validation and optional submissions",
@@ -241,6 +251,20 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "train-adaptive":
+        from .adaptive_finetune import run
+
+        if args.reset_to_original:
+            run(
+                args.work,
+                args.attempts,
+                args.batches,
+                args.lock_fd,
+                args.export_tiles,
+                reset_to_original=True,
+            )
+        else:
+            run(args.work, args.attempts, args.batches, args.lock_fd, args.export_tiles)
     elif args.command == "train-iterate":
         from .iterative_finetune import run
 

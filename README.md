@@ -525,3 +525,37 @@ of those two CSVs: exported checksum, checkpoint SHA, tile options, test fingerp
 class/score distributions, source frozen run, complete native/tiled COCO100/500 scores,
 per-class AP and the recorded export-selection reference. Missing artifacts are reported;
 the script does not infer an unseen export provenance from training logs alone.
+
+### Adaptive short trials with rollback
+
+`scripts/start_adaptive_finetune.py --work "$WORK" --attempts 2 --batches 6000 --export-tiles`
+starts from the preserved `a7cd89fb349d` RT-DETR checkpoint used by the best observed
+public tiled submission (`0.1928780288`). It keeps the original training fold and its
+complete held-out fold; the previously added fold-validation clips are not used for
+training here. Each trial processes at most the requested number of frames or 30 minutes
+of training, then completes validation. Validation/export add wall time beyond that
+training cap. There is no instruction to consume a long fixed training block blindly.
+
+A challenger must gain at least `0.001` COCO100 mAP on both the complete original
+held-out fold and a fixed 192-frame official confirmation set. The official clips are
+checked against source training sequences. A rejected challenger is archived in its
+own trial directory, the next trial reloads the champion, and LR is halved. An accepted
+challenger becomes the internal champion. This is an internal selection rule, not a
+guarantee of a higher public/private leaderboard score. The original weights/CSV remain
+preserved. `ACCEPT` / `ROLLBACK` logs show both gains, the next LR and champion hash.
+
+Weights, AdamW moments, AMP scaler and loader/RNG state are initialized from the chosen
+champion; LR and the per-trial budget/schedule are explicitly reset. BatchNorm running
+statistics remain fixed, while affine parameters can learn. Source validation metrics
+are reused only when checkpoint epoch/score, exact train/val fingerprint, model,
+precision, TF32 setting, batch size and detection caps match, avoiding repeat evaluation
+of the same initial model. Pending confirmation resumes without repeating its training.
+
+State: `adaptive_training/state.json`; trial artifacts:
+`runs/rtdetr_adaptive_finetune/attempt_XXX/`. The optional tiled check uses the established
+settings and existing full-validation export hurdle before producing a CSV; a following
+trial can train while that completed CSV is uploaded. `--reset-to-original` restores the
+verified original champion, reduces LR and preserves all previous trials if external
+feedback invalidates a branch. A `STOP` file in `runs/rtdetr_adaptive_finetune/` prevents
+further trials/exports at the next controller boundary. Repeating the launcher continues
+from its saved state, with duplicate-launch and GPU-lease protection.

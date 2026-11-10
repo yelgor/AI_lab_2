@@ -182,3 +182,18 @@ confidence counts, full COCO500 cache extraction, unchanged-CSV checksum equalit
 changed-CSV checksum rejection and missing-file reporting. Ruff passes. The actual
 candidate's local selection reports have not been supplied; the export reference and
 root cause remain unverified. No additional GPU training is required by this audit.
+
+### Adaptive champion/challenger controller
+
+Full CPU regression suite: **220 passed**, with 14 existing Matplotlib/Pyparsing warnings.
+The 12 adaptive tests were rerun successfully after adding explicit original-champion
+reset and RNG-state assertions. Coverage includes two-holdout acceptance, rejection of
+one-sided or insufficient gains, exact source metric-cache compatibility guards, actual
+AdamW/scaler/RNG warm restoration with a new LR, no repeated initial inference, interrupted
+confirmation recovery without repeated training, accepted/rejected/accepted trial
+transitions, optimizer step counts `[2,3,3]` proving the failed branch was not inherited,
+LR halving, original-checkpoint preservation, explicit public-best reset, STOP handling,
+official confirmation leakage rejection and launcher/CLI lease forwarding. Ruff, CLI and
+launch-shell checks pass. These are CPU behavior checks; the policy has no new measured
+CUDA training speed or Kaggle gain yet. The observed `3ae5fa3a569c` score `0.182472636`
+is recorded as another regression against the original public-best result.

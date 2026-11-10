@@ -256,7 +256,11 @@ def train(
     init_checkpoint=None,
     yield_after_epoch=False,
     round_batches=None,
+    warm_optimizer=False,
+    initial_validation_cache=None,
 ):
+    if (warm_optimizer or initial_validation_cache is not None) and not init_checkpoint:
+        raise ValueError("Warm optimizer/cache require an initialization checkpoint")
     if round_batches is not None and (
         not isinstance(round_batches, int) or round_batches < 1
     ):
@@ -283,6 +287,7 @@ def train(
     data_hash = digest({"train": training, "val": validation})
     construction = dict(config["model"])
     checkpoint = None
+    warm_state = None
     initialization = None
     seen_sequences = set()
     if resume:
@@ -331,6 +336,31 @@ def train(
             "source_best_score": checkpoint["best"],
             "fresh_optimizer_schedule_budget": True,
         }
+        if initial_validation_cache is not None:
+            compatible = (
+                checkpoint["data_fingerprint"] == data_hash
+                and initial_validation_cache["epoch"] == checkpoint["epoch"]
+                and initial_validation_cache["metrics"]["coco100"]["mAP"]
+                == checkpoint["best"]
+                and checkpoint["config"]["runtime"]["precision"]
+                == config["runtime"]["precision"]
+                and checkpoint["config"]["runtime"].get("tf32", False)
+                == config["runtime"].get("tf32", False)
+                and checkpoint["config"]["loader"]["batch_size"]
+                == config["loader"]["batch_size"]
+                and checkpoint["config"]["evaluation"]["max_detections"]
+                == config["evaluation"]["max_detections"]
+            )
+            if not compatible:
+                raise ValueError(
+                    "Initial validation cache does not match source weights/data/inference"
+                )
+        if warm_optimizer:
+            warm_state = {
+                key: checkpoint[key] for key in ("optimizer", "scaler", "rng")
+            }
+            initialization["fresh_optimizer_schedule_budget"] = False
+            initialization["optimizer_restored_with_new_lr_and_budget"] = True
     model = build_model(
         construction,
         checkpoint.get("adapter") if checkpoint else None,
@@ -351,6 +381,12 @@ def train(
         ],
         weight_decay=tc["weight_decay"],
     )
+    if warm_state is not None:
+        optimizer.load_state_dict(warm_state["optimizer"])
+        for group, lr in zip(
+            optimizer.param_groups, (tc["lr"] * tc["backbone_lr_factor"], tc["lr"])
+        ):
+            group["lr"] = group["initial_lr"] = lr
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=tc["epochs"]
     )
@@ -359,6 +395,10 @@ def train(
         enabled=device.type == "cuda" and config["runtime"]["precision"] == "fp16",
     )
     generator = torch.Generator().manual_seed(config["seed"])
+    if warm_state is not None:
+        scaler.load_state_dict(warm_state["scaler"])
+        restore_rng(warm_state["rng"], generator)
+        warm_state = None
     start_epoch, best, elapsed_before = 0, -1.0, 0.0
     pending_validation = None
     if resume:
@@ -459,12 +499,24 @@ def train(
             "Evaluating initialization on the new validation split before fine-tuning",
             flush=True,
         )
-        initial_predictions, initial_timing = predict(
-            model, config, validation, device, worker_context=worker_context
-        )
-        initial_scores = evaluate(
-            validation, initial_predictions, config["evaluation"]["max_detections"]
-        )
+        if initial_validation_cache is None:
+            initial_predictions, initial_timing = predict(
+                model, config, validation, device, worker_context=worker_context
+            )
+            initial_scores = evaluate(
+                validation, initial_predictions, config["evaluation"]["max_detections"]
+            )
+        else:
+            initial_predictions = None
+            initial_timing = {
+                **initial_validation_cache.get("timing", {}),
+                "reused_from_source": True,
+            }
+            initial_scores = initial_validation_cache["metrics"]
+            print(
+                "Reusing exact source validation: weights, split, cap and precision verified",
+                flush=True,
+            )
         initial_score = initial_scores["coco100"]["mAP"]
         if initial_score is None:
             raise ValueError("Initial validation has no evaluable targets")
@@ -485,7 +537,7 @@ def train(
         write_json(output / "best_metrics.json", initial_log)
         write_json(output / "initial_validation.json", initial_log)
         del initial_predictions, initial_payload
-        print(f"Initial official-validation mAP={best:.4f}", flush=True)
+        print(f"Initial validation mAP={best:.4f}", flush=True)
 
     validation_job = None
     for epoch in range(start_epoch, tc["epochs"]):
