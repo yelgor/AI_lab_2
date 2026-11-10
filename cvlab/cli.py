@@ -38,6 +38,14 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    bn = commands.add_parser(
+        "evaluate-bn", help="Diagnose BatchNorm with train-only calibration"
+    )
+    bn.add_argument("--work", required=True)
+    bn.add_argument("--max-images", type=int, default=192)
+    bn.add_argument("--calibration-images", type=int, default=256)
+    bn.add_argument("--vram-gib", type=float, default=6)
+    bn.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     crops = commands.add_parser(
         "train-crops", help="Warm fine-tuning on all train clips with native crops"
     )
@@ -212,6 +220,16 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "evaluate-bn":
+        from .bn_experiment import run
+
+        run(
+            args.work,
+            args.max_images,
+            args.calibration_images,
+            args.vram_gib,
+            args.lock_fd,
+        )
     elif args.command == "train-crops":
         from .crop_finetune import run
 

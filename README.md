@@ -406,3 +406,38 @@ OOF evaluation required for the assignment.
 For a custom new experiment, `cvlab train --config ... --init-checkpoint ... --async-metrics`
 exposes the same warm initialization. `--init-checkpoint` and `--resume` are mutually
 exclusive; resume keeps the saved configuration and experiment protocol.
+
+### BatchNorm diagnostic after the failed crop experiment
+
+The observed crop experiment retained its initialization: official mAP `0.1676`
+versus `0.1070` at the last epoch. Tiled inference reached public Kaggle `0.1928780288`,
+which remains below `0.2216324580`. Exact public scores and the rounded crop log
+observations are recorded under `experiments/`.
+
+`scripts/start_bn_search.py --work "$WORK"` queues an inference-only diagnostic behind
+active GPU work. The pinned Hugging Face RT-DETR freezes backbone BatchNorm layers,
+but its input projections and encoder still contain mutable BatchNorm. With microbatch
+size 1, gradient accumulation does not enlarge the batch used to update these statistics.
+Statistics drift is a hypothesis for degradation, not an established cause.
+
+The diagnostic compares original `best.pt`, its train-calibrated version, crop `last.pt`
+(if available), the crop weights with original BatchNorm statistics, and crop weights
+with recalibrated statistics. Calibration uses 256 clip-balanced official **train**
+frames at full-frame inference preprocessing. Only mutable BatchNorm runs in training
+mode with cumulative running statistics; there are no gradients, optimizer updates,
+crops, flips, dropout or label-based adaptation. Frozen backbone normalization and all
+learned weights, including BatchNorm affine parameters, are preserved. Calibration and
+source-training clips must be disjoint from official validation clips.
+
+All candidates use the same 192 official validation frames. A winning candidate and
+the original are then evaluated on all 2,846 validation frames. CSV export requires
+at least `0.01` absolute COCO100 mAP improvement over the stronger of original full-frame
+inference and an existing, provenance-matched tiled full-validation result. Public
+leaderboard scores are never used in calibration or this selection. Candidates that
+fail this check retain their diagnostic metrics but produce no CSV.
+
+Artifacts live under `bn_diagnostic/`; `bn_diagnostic/summary.json` is the latest result.
+Derived checkpoints are inference-only; original runs are preserved. Repeated launches
+reuse completed cases keyed by source hashes, calibration data, validation data and
+configuration. Use the usual `nohup systemd-inhibit ...` wrapper for overnight work.
+The log prints `BN CANDIDATE READY FOR KAGGLE` only after a candidate passes confirmation.

@@ -131,3 +131,16 @@ TorchVision/RT-DETR inference, resume, submission and overlap tests also passed.
 
 These checks establish software behavior on CPU. No CUDA training throughput, laptop
 peak memory or VisDrone/Kaggle improvement for this crop recipe was measured here.
+
+### Train-only BatchNorm diagnostic
+
+**184 CPU tests passed**, with 14 existing Matplotlib/Pyparsing warnings; Ruff, CLI
+help and launch-shell syntax checks pass. Nine added tests cover: calibration changing
+only running moments/counters, preserving affine and other learned weights, restoring
+module modes/momenta after errors, a real pinned Hugging Face RT-DETR forward with
+unchanged parameters, source/calibration sequence leakage rejection, full-validation
+rejection of optimistic subset results, comparison against the stronger existing tiled
+candidate, original-checkpoint preservation, derived inference-only artifacts and
+launcher-to-CLI GPU-lease/argument forwarding. Controller score outcomes and CUDA budget
+APIs are mocked in CPU tests; this does not establish any VisDrone/Kaggle gain or laptop
+CUDA performance. Calibration must be run on the user's dataset to test the hypothesis.

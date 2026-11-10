@@ -1,0 +1,15 @@
+{
+  "model": "rtdetr",
+  "run": "rtdetr_crop_finetune",
+  "validation_split": "official",
+  "initial_mAP": 0.1676,
+  "last_epoch": 2,
+  "last_epoch_loss": 12.1084,
+  "last_epoch_mAP": 0.107,
+  "best_mAP": 0.1676,
+  "gain": 0.0,
+  "submission_created": false,
+  "precision_note": "Rounded values as printed in the user-supplied training log",
+  "evidence": "User-supplied crop_finetune.log on 2026-11-10",
+  "conclusion": "Combined crop/data/schedule recipe did not improve this validation split. Cause not isolated."
+}
