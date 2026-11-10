@@ -11,7 +11,7 @@ import yaml
 from .common import read_json, write_json
 
 
-def recipe(source, work, hours=2, epochs=4, lr=5e-5, crop_size=768):
+def recipe(source, work, hours=2, epochs=4, lr=5e-5, crop_size=768, full_frames=False):
     if (
         not math.isfinite(hours)
         or hours <= 0
@@ -25,9 +25,13 @@ def recipe(source, work, hours=2, epochs=4, lr=5e-5, crop_size=768):
         )
     name = source["model"]["name"]
     config = copy.deepcopy(source)
-    config["output"] = str(Path(work) / "runs" / f"{name}_crop_finetune")
+    mode = "fullframe" if full_frames else "crop"
+    config["output"] = str(Path(work) / "runs" / f"{name}_{mode}_finetune")
     config["data"].update(
-        split="official", frame_step=2, crop_probability=0.5, crop_size=crop_size
+        split="official",
+        frame_step=1 if full_frames else 2,
+        crop_probability=0.0 if full_frames else 0.5,
+        crop_size=crop_size,
     )
     config["loader"].update(
         batch_size=1,
@@ -45,10 +49,14 @@ def recipe(source, work, hours=2, epochs=4, lr=5e-5, crop_size=768):
         max_batches_per_epoch=None,
     )
     config["runtime"].update(device="cuda", precision="fp16", cpu_threads=4)
+    if full_frames:
+        config["train"].update(
+            early_stopping_patience=2, early_stopping_min_delta=0.001
+        )
     return config
 
 
-def run(work, models, hours, epochs, lr, crop_size, lock_fd):
+def run(work, models, hours, epochs, lr, crop_size, lock_fd, full_frames=False):
     from .engine import train
     from .score_improvement import release_gpu, file_hash
     from .submit_cpu import create_submission
@@ -69,10 +77,21 @@ def run(work, models, hours, epochs, lr, crop_size, lock_fd):
         summaries = []
         for name in models:
             source = work / "runs" / f"{name}_fold0_local"
-            config = recipe(
-                read_json(source / "config.json"), work, hours, epochs, lr, crop_size
+            arguments = [
+                read_json(source / "config.json"),
+                work,
+                hours,
+                epochs,
+                lr,
+                crop_size,
+            ]
+            config = (
+                recipe(*arguments, full_frames=True)
+                if full_frames
+                else recipe(*arguments)
             )
-            config_path = work / "configs" / f"{name}_crop_finetune.yaml"
+            output = Path(config["output"])
+            config_path = work / "configs" / f"{output.name}.yaml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             if (
                 config_path.is_file()
@@ -82,10 +101,9 @@ def run(work, models, hours, epochs, lr, crop_size, lock_fd):
                     "Existing fine-tuning configuration differs; preserved"
                 )
             config_path.write_text(yaml.safe_dump(config, sort_keys=False))
-            output = Path(config["output"])
             resume = output / "last.pt"
             print(
-                f"FINE-TUNING {name}: source best.pt; all train clips at frame_step=2; crop_probability=0.5; crop={crop_size}; lr={lr}; budget={hours}h",
+                f"FINE-TUNING {name}: source best.pt; all train clips; frame_step={config['data']['frame_step']}; crop_probability={config['data']['crop_probability']}; lr={lr}; budget={hours}h",
                 flush=True,
             )
             with ValidationPipeline() as pipeline:
@@ -104,6 +122,7 @@ def run(work, models, hours, epochs, lr, crop_size, lock_fd):
             entry = {
                 "model": name,
                 "validation_split": "official",
+                "training_mode": "full frames" if full_frames else "native crops",
                 "initial_validation": initial,
                 "best_validation": best,
                 "gain": gain,
@@ -115,14 +134,17 @@ def run(work, models, hours, epochs, lr, crop_size, lock_fd):
                 destination = (
                     work
                     / "submissions"
-                    / f"{name}_crops_{sha[:12]}_{config['model']['image_size']}.csv"
+                    / f"{name}_{'fullframe' if full_frames else 'crops'}_{sha[:12]}_{config['model']['image_size']}.csv"
                 )
                 if not destination.is_file():
                     create_submission(
                         output, destination, threads=2, device_name="cuda", vram_gib=6
                     )
                 entry["submission"] = str(destination)
-                print(f"CROP CANDIDATE READY FOR KAGGLE: {destination}", flush=True)
+                print(
+                    f"{'FULLFRAME' if full_frames else 'CROP'} CANDIDATE READY FOR KAGGLE: {destination}",
+                    flush=True,
+                )
             print(
                 f"{name}: initial official mAP={initial['metrics']['coco100']['mAP']:.4f}; best={best['metrics']['coco100']['mAP']:.4f}; gain={gain:.4f}",
                 flush=True,
@@ -130,5 +152,6 @@ def run(work, models, hours, epochs, lr, crop_size, lock_fd):
             write_json(output / "finetune_summary.json", entry)
             summaries.append(entry)
             release_gpu()
-        write_json(work / "crop_finetune_summary.json", {"models": summaries})
+        mode = "fullframe" if full_frames else "crop"
+        write_json(work / f"{mode}_finetune_summary.json", {"models": summaries})
         return summaries

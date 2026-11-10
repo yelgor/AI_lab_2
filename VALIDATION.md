@@ -144,3 +144,17 @@ candidate, original-checkpoint preservation, derived inference-only artifacts an
 launcher-to-CLI GPU-lease/argument forwarding. Controller score outcomes and CUDA budget
 APIs are mocked in CPU tests; this does not establish any VisDrone/Kaggle gain or laptop
 CUDA performance. Calibration must be run on the user's dataset to test the hypothesis.
+
+### Full-frame warm fine-tuning and early stopping
+
+**197 CPU tests passed**, with the same 14 Matplotlib/Pyparsing warnings. Ruff, the
+training CLI and launch-shell syntax checks pass. Thirteen new checks cover the full
+training-frame recipe with disabled crops, source-config preservation, significant-gain
+patience with unique completed epochs, serial/asynchronous early stopping while keeping
+initial best weights, self-contained stopped-run resume, pending-validation recovery
+without repeated training, BN-only process selection for the exact work root, Linux
+process-identity pinning before signaling, preserved unrelated training processes,
+duplicate-launch protection and actual launcher-to-CLI argument/lease forwarding.
+Existing warm-initialization, normalization, real detector inference, submission,
+resume and CPU/GPU-overlap regression tests also pass. CUDA training and any score gain
+from this full-frame recipe still need measurement on the user's GPU and dataset.

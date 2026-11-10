@@ -38,6 +38,14 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    full = commands.add_parser(
+        "train-fullframes", help="Continue best weights on full training frames"
+    )
+    full.add_argument("--work", required=True)
+    full.add_argument("--hours", type=float, default=2)
+    full.add_argument("--epochs", type=int, default=4)
+    full.add_argument("--lr", type=float, default=1e-5)
+    full.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     bn = commands.add_parser(
         "evaluate-bn", help="Diagnose BatchNorm with train-only calibration"
     )
@@ -220,6 +228,19 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "train-fullframes":
+        from .crop_finetune import run
+
+        run(
+            args.work,
+            ["rtdetr"],
+            args.hours,
+            args.epochs,
+            args.lr,
+            768,
+            args.lock_fd,
+            full_frames=True,
+        )
     elif args.command == "evaluate-bn":
         from .bn_experiment import run
 

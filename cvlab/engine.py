@@ -205,6 +205,41 @@ def atomic_checkpoint(path, checkpoint):
     temporary.replace(path)
 
 
+def early_stopping_reached(config, output):
+    patience = config["train"].get("early_stopping_patience", 0)
+    if not patience:
+        return False
+    delta = config["train"].get("early_stopping_min_delta", 0.0)
+    if patience < 1 or not math.isfinite(delta) or delta < 0:
+        raise ValueError("Invalid early-stopping configuration")
+    output = Path(output)
+    initial = output / "initial_validation.json"
+    best = (
+        json.loads(initial.read_text())["metrics"]["coco100"]["mAP"]
+        if initial.is_file()
+        else -math.inf
+    )
+    history = output / "history.jsonl"
+    if not history.is_file():
+        return False
+    rows = {
+        row["epoch"]: row
+        for row in (
+            json.loads(line)
+            for line in history.read_text().splitlines()
+            if line.strip()
+        )
+    }
+    stale = 0
+    for _, row in sorted(rows.items()):
+        score = row["metrics"]["coco100"]["mAP"]
+        if score > best + delta:
+            best, stale = score, 0
+        else:
+            stale += 1
+    return stale >= patience
+
+
 def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
     if resume and init_checkpoint:
         raise ValueError("Use resume or init_checkpoint, not both")
@@ -425,6 +460,12 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
 
     validation_job = None
     for epoch in range(start_epoch, tc["epochs"]):
+        if pending_validation is None and early_stopping_reached(config, output):
+            print(
+                "EARLY STOP: validation improvement below patience threshold",
+                flush=True,
+            )
+            break
         if (
             pending_validation is None
             and elapsed_before + time.perf_counter() - started >= tc["max_hours"] * 3600
@@ -469,6 +510,16 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad(set_to_none=True)
+                    # Read only committed metrics; with overlap a previous epoch
+                    # can finish while the next one is already using the GPU.
+                    if observed % 250 == 0 or index + 1 == batches:
+                        if early_stopping_reached(config, output):
+                            print(
+                                "EARLY STOP: committing current progress; best weights preserved",
+                                flush=True,
+                            )
+                            stop = True
+                            break
                     if (
                         elapsed_before + time.perf_counter() - started
                         >= tc["max_hours"] * 3600

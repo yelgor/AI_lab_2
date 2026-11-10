@@ -441,3 +441,35 @@ Derived checkpoints are inference-only; original runs are preserved. Repeated la
 reuse completed cases keyed by source hashes, calibration data, validation data and
 configuration. Use the usual `nohup systemd-inhibit ...` wrapper for overnight work.
 The log prints `BN CANDIDATE READY FOR KAGGLE` only after a candidate passes confirmation.
+
+### Continue best RT-DETR weights on full frames
+
+`scripts/start_fullframe_finetune.py --work "$WORK" --hours 2 --replace-bn`
+queues a separate warm fine-tuning run initialized from the original
+`runs/rtdetr_fold0_local/best.pt`. The optional `--replace-bn` stops only actual
+Python BN diagnostic processes for the same work root, including their queued
+launcher, using Linux process identity handles. Other training jobs and wrappers
+are preserved; the new job waits for the GPU lease. Duplicate full-frame launchers
+exit without starting another trainer.
+
+The model input size and architecture stay unchanged. Training uses all 24,201
+frames from the 56 official train clips, with `frame_step=1`, no crops, learning
+rate `1e-5`, backbone factor `0.1`, batch 1 and accumulation 4. The official 2,846
+validation frames remain held out. This is a new optimizer/schedule and an additional
+time budget initialized from learned weights, not an exact continuation of the
+original optimizer or a claim to identify individual previously unseen frames.
+Initial weights are reevaluated on the new holdout before training, and a worse
+trained checkpoint cannot replace that initial best.
+
+Output: `runs/rtdetr_fullframe_finetune`; configuration:
+`configs/rtdetr_fullframe_finetune.yaml`. The same command resumes the new run's
+`last.pt` with its remaining budget. Early stopping uses two consecutive completed
+validation results without a gain exceeding `0.001` from its running reference.
+With asynchronous CPU metrics, it also checks committed results at training
+boundaries, so an in-flight next epoch can be saved and stopped. Pending validation
+is completed on resume even if the stopping condition is already reached.
+The two-hour budget includes initial validation; final validation/export may extend
+wall time. Native-resolution CSV export requires a `0.01` full-validation gain over
+initialization and prints `FULLFRAME CANDIDATE READY FOR KAGGLE`. Native and tiled
+inference must still be compared on the resulting learned weights; this command
+performs training and the native export, not a new tiling search.
