@@ -240,7 +240,27 @@ def early_stopping_reached(config, output):
     return stale >= patience
 
 
-def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
+def training_mode(model, train_config):
+    model.train()
+    if train_config.get("freeze_batch_norm", False):
+        for layer in model.modules():
+            if isinstance(layer, torch.nn.modules.batchnorm._BatchNorm):
+                # Keep learned affine parameters trainable; freeze moments only.
+                layer.eval()
+
+
+def train(
+    config,
+    resume=None,
+    validation_pipeline=None,
+    init_checkpoint=None,
+    yield_after_epoch=False,
+    round_batches=None,
+):
+    if round_batches is not None and (
+        not isinstance(round_batches, int) or round_batches < 1
+    ):
+        raise ValueError("round_batches must be a positive integer")
     if resume and init_checkpoint:
         raise ValueError("Use resume or init_checkpoint, not both")
     device = setup(config)
@@ -378,6 +398,11 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
         )
     if initialization:
         write_json(output / "initialization.json", initialization)
+        if not resume:
+            print(
+                f"Warm start from learned weights: {initialization['checkpoint']}; sha256={initialization['sha256'][:12]}",
+                flush=True,
+            )
     write_json(output / "config.json", config)
     write_json(output / "environment.json", environment())
     write_json(
@@ -415,6 +440,10 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
             "validation_pending": progress,
             "initialization": initialization,
             "seen_training_sequences": sorted(seen_sequences),
+            "execution": {
+                "round_batches": round_batches,
+                "yield_after_epoch": yield_after_epoch,
+            },
         }
 
     if (
@@ -474,9 +503,12 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
         if pending_validation is None:
             if validation_pipeline is not None:
                 validation_pipeline.memory_gate()
-            model.train()
+            training_mode(model, tc)
             optimizer.zero_grad(set_to_none=True)
-            batches = min(len(loader), tc.get("max_batches_per_epoch") or len(loader))
+            batches = min(
+                len(loader),
+                round_batches or tc.get("max_batches_per_epoch") or len(loader),
+            )
             total_loss, observed, stop = 0.0, 0, False
             print(f"epoch={epoch} training; up to {batches} batches", flush=True)
             for index, (images, targets, metadata) in enumerate(loader):
@@ -570,6 +602,7 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
                 "epoch": epoch,
                 "train_loss": total_loss / observed,
                 "train_batches": observed,
+                "train_batches_planned": batches,
                 "epoch_complete": observed == batches,
                 "timing": timing,
                 "lr": [group["lr"] for group in optimizer.param_groups],
@@ -587,7 +620,7 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
                 started,
             )
             del predictions, payload
-            if stop:
+            if stop or yield_after_epoch:
                 break
             continue
         scores = evaluate(
@@ -603,6 +636,7 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
             "epoch": epoch,
             "train_loss": total_loss / observed,
             "train_batches": observed,
+            "train_batches_planned": batches,
             "epoch_complete": observed == batches,
             "elapsed_seconds": elapsed,
             "metrics": scores,
@@ -636,7 +670,7 @@ def train(config, resume=None, validation_pipeline=None, init_checkpoint=None):
             f"epoch={epoch} loss={total_loss / observed:.4f} mAP={score:.4f} best={best:.4f}",
             flush=True,
         )
-        if stop:
+        if stop or yield_after_epoch:
             break
     if validation_pipeline is None:
         print(f"Run artifacts: {output.resolve()}")

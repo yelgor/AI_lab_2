@@ -473,3 +473,45 @@ wall time. Native-resolution CSV export requires a `0.01` full-validation gain o
 initialization and prints `FULLFRAME CANDIDATE READY FOR KAGGLE`. Native and tiled
 inference must still be compared on the resulting learned weights; this command
 performs training and the native export, not a new tiling search.
+
+### Monitored continuation in configurable training rounds
+
+`scripts/start_iterative_finetune.py --work "$WORK" --rounds 3 --batches 6000 --export-tiles`
+continues the learned weights from the completed `rtdetr_fullframe_finetune/best.pt`.
+It waits for that run's GPU lease, including final CPU metrics and export, before
+selecting the source checkpoint. The first round uses a fresh low-LR optimizer;
+subsequent rounds and later invocations restore weights, AdamW moments, scheduler,
+RNG, elapsed budget and loader state from the new experiment's `last.pt`.
+
+Output: `runs/rtdetr_iterative_finetune`; summary: `iterative_finetune_summary.json`.
+Each round processes at most 6,000 randomly shuffled full train frames and then
+validates on all official validation frames. This is a bounded round, not a full
+pass through the dataset. All train clips and frames remain in the sampling pool.
+`--batches` can be changed on the next invocation without resetting weights or
+optimizer state; the effective limit is recorded in checkpoint execution metadata
+and history. `--rounds 3` runs at most three rounds, with a cumulative 12-hour
+experiment cap as a guard, not an instruction to run continuously for 12 hours.
+The validation interval, export time and total wall time depend on actual throughput.
+
+The recipe keeps the 960 input/architecture, FP16, batch 1, accumulation 4 and LR
+`1e-5`, with five-result patience. During training it freezes BatchNorm running
+statistics while leaving affine parameters trainable. This is a training experiment
+aimed at batch-1 stability; it does not calibrate normalization on validation/test data
+and has no measured GPU/competition gain yet. Original checkpoints remain preserved.
+
+`ROUND COMPLETE` prints current/best/initial official mAP. With `--export-tiles`, a
+new best that improves native mAP by at least `0.002` triggers the already chosen
+960-pixel tiles / NMS 0.6. The same checkpoint/settings first use 192 validation frames,
+then full validation. Export requires a `0.001` full-validation gain over the stronger
+of the new native prediction and the previous verified tiled model. Dataset IDs,
+fingerprint and previous checkpoint provenance must match. Old tiling reports are
+preserved; custom-run results use `score_improvement/tiling_finetune_summary.json`.
+Only then does `TILED CANDIDATE READY FOR KAGGLE` announce a CSV. After export, the
+next training round continues while the user can upload the completed CSV externally.
+GPU validation/export is serialized with training on this single device.
+
+To request a stop after the current round, create
+`runs/rtdetr_iterative_finetune/STOP`; the controller preserves checkpoints and skips
+further exports/rounds when it sees the file. Remove it before continuing. Repeating
+the launcher resumes the experiment. Specific runs can also use the existing tiled
+launcher directly: `--runs rtdetr_iterative_finetune --tile-sides 960 --ious 0.6`.

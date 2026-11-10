@@ -158,3 +158,17 @@ duplicate-launch protection and actual launcher-to-CLI argument/lease forwarding
 Existing warm-initialization, normalization, real detector inference, submission,
 resume and CPU/GPU-overlap regression tests also pass. CUDA training and any score gain
 from this full-frame recipe still need measurement on the user's GPU and dataset.
+
+### Configurable monitored continuation and new-weight tile candidates
+
+The full CPU regression run passed **205 tests**. Seven focused iterative tests also
+passed after the final allocator-budget guard. Coverage includes real training/checkpoint
+round yields, restoration of optimizer step counts and RNG-compatible continuation with
+changed round limits, frozen BatchNorm moments with trainable affine gradients, bounded
+round counts, STOP handling, source-checkpoint preservation, launcher/CLI inherited leases,
+training/export/training handoff with continued optimizer progress, and restoration of
+the GPU allocator fraction after successful or failed inference. Four additional custom-run
+tiling cases in the full regression suite verify full-holdout confirmation against the
+previous tiled reference and preservation of the old report, with real geometry/CSV export.
+Ruff, CLI help and shell launch syntax checks passed. GPU allocator APIs use CPU mocks;
+actual CUDA throughput and any new VisDrone/Kaggle gains remain unmeasured here.

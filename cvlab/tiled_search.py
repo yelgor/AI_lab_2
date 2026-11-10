@@ -61,8 +61,43 @@ def selected_size(work, name, sha, native):
     return native
 
 
+def existing_full_reference(work, name, records, baseline):
+    reference = {
+        "kind": "current full-frame",
+        "mAP": baseline["metrics"]["coco100"]["mAP"],
+    }
+    path = work / "score_improvement/tiling_summary.json"
+    if path.is_file():
+        for entry in read_json(path)["models"]:
+            candidate = entry.get("full_candidate")
+            if entry.get("model") != name or not candidate:
+                continue
+            validate_cache(candidate, entry["checkpoint_sha256"], records)
+            value = candidate["metrics"]["coco100"]["mAP"]
+            if (
+                isinstance(value, (int, float))
+                and math.isfinite(value)
+                and value > reference["mAP"]
+            ):
+                reference = {
+                    "kind": "previous tiled",
+                    "mAP": value,
+                    "checkpoint_sha256": entry["checkpoint_sha256"],
+                }
+    return reference
+
+
 def run(
-    work, models, sides, ious, max_images, vram_gib, workers, lock_fd, min_gain=0.01
+    work,
+    models,
+    sides,
+    ious,
+    max_images,
+    vram_gib,
+    workers,
+    lock_fd,
+    min_gain=0.01,
+    runs=None,
 ):
     import torch
     from .engine import load_trained, predict, setup
@@ -70,11 +105,13 @@ def run(
     from .prepare import select_records
     from .submit_cpu import _available_ram_mib, _cuda_budget
 
-    if (
-        not models
-        or len(set(models)) != len(models)
-        or max_images < 1
-        or set(models) - {"rtdetr", "fasterrcnn", "fcos", "retinanet"}
+    if max_images < 1 or (
+        not runs
+        and (
+            not models
+            or len(set(models)) != len(models)
+            or set(models) - {"rtdetr", "fasterrcnn", "fcos", "retinanet"}
+        )
     ):
         raise ValueError("Unique models and positive validation subset required")
     if not sides or not ious or any(not 0 < iou <= 1 for iou in ious):
@@ -84,6 +121,15 @@ def run(
     for side in sides:
         TileOptions(side, nms_iou=ious[0], workers=workers).validate()
     work = Path(work).resolve()
+    if runs:
+        sources = [
+            (Path(path) if Path(path).is_absolute() else work / "runs" / path).resolve()
+            for path in runs
+        ]
+        if len(set(sources)) != len(sources):
+            raise ValueError("Run paths must be unique")
+    else:
+        sources = [work / "runs" / f"{name}_fold0_local" for name in models]
     expected, actual = (work / ".local_gpu_queue.lock").stat(), os.fstat(lock_fd)
     if (expected.st_dev, expected.st_ino) != (actual.st_dev, actual.st_ino):
         raise ValueError("GPU lease belongs to another work directory")
@@ -95,9 +141,9 @@ def run(
             "minimum_full_validation_gain": min_gain,
             "models": [],
         }
-        for name in models:
-            source = work / "runs" / f"{name}_fold0_local"
+        for source in sources:
             frozen, config, sha, seen = freeze_run(source, work / "score_improvement")
+            name = config["model"]["name"]
             config = copy.deepcopy(config)
             config["model"]["image_size"] = selected_size(
                 work, name, sha, config["model"]["image_size"]
@@ -118,6 +164,7 @@ def run(
             path = directory / f"subset_{digest([settings, subset])[:12]}.json"
             entry = {
                 "model": name,
+                "source_run": str(source),
                 "checkpoint_sha256": sha,
                 "image_size": size,
                 "subset_images": len(subset),
@@ -243,9 +290,19 @@ def run(
                     write_json(candidate_path, candidate)
                 entry["full_global"] = baseline
                 entry["full_candidate"] = candidate
-                gain = (
-                    candidate["metrics"]["coco100"]["mAP"]
-                    - baseline["metrics"]["coco100"]["mAP"]
+                reference = (
+                    existing_full_reference(work, name, records, baseline)
+                    if runs
+                    else {
+                        "kind": "current full-frame",
+                        "mAP": baseline["metrics"]["coco100"]["mAP"],
+                    }
+                )
+                entry["export_reference"] = reference
+                gain = candidate["metrics"]["coco100"]["mAP"] - reference["mAP"]
+                print(
+                    f"{source.name}: full tiled mAP={candidate['metrics']['coco100']['mAP']:.6f}; reference={reference['mAP']:.6f} ({reference['kind']}); gain={gain:.6f}",
+                    flush=True,
                 )
                 entry["full_validation_gain"] = gain
                 entry["minimum_full_validation_gain"] = min_gain
@@ -276,6 +333,9 @@ def run(
             model = None
             release_gpu()
             report["models"].append(entry)
-            write_json(work / "score_improvement/tiling_summary.json", report)
+            report_name = (
+                "tiling_finetune_summary.json" if runs else "tiling_summary.json"
+            )
+            write_json(work / "score_improvement" / report_name, report)
             print(f"{name}: {entry['outcome']}", flush=True)
         return report

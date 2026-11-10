@@ -38,6 +38,15 @@ def main():
     prep.add_argument("--workers", type=int, default=8)
     prep.add_argument("--folds", type=int, default=3)
     prep.add_argument("--seed", type=int, default=42)
+    cont = commands.add_parser(
+        "train-iterate",
+        help="Train saved best weights in bounded rounds with validation and optional submissions",
+    )
+    cont.add_argument("--work", required=True)
+    cont.add_argument("--rounds", type=int, default=3)
+    cont.add_argument("--batches", type=int, default=6000)
+    cont.add_argument("--export-tiles", action="store_true")
+    cont.add_argument("--lock-fd", type=int, required=True, help=argparse.SUPPRESS)
     full = commands.add_parser(
         "train-fullframes", help="Continue best weights on full training frames"
     )
@@ -69,7 +78,11 @@ def main():
         help="Validate tiled inference and export an improved candidate",
     )
     tiles.add_argument("--work", required=True)
-    tiles.add_argument("--models", nargs="+", default=["rtdetr", "fasterrcnn"])
+    tile_source = tiles.add_mutually_exclusive_group()
+    tile_source.add_argument("--models", nargs="+", default=["rtdetr", "fasterrcnn"])
+    tile_source.add_argument(
+        "--runs", nargs="+", help="Specific trained run paths or names under work/runs"
+    )
     tiles.add_argument("--tile-sides", nargs="+", type=int, default=[768, 960])
     tiles.add_argument("--ious", nargs="+", type=float, default=[0.5, 0.6])
     tiles.add_argument("--max-images", type=int, default=192)
@@ -228,6 +241,16 @@ def main():
         from .overlap_queue import run
 
         run(args.work, args.models)
+    elif args.command == "train-iterate":
+        from .iterative_finetune import run
+
+        run(
+            args.work,
+            args.rounds,
+            args.batches,
+            args.lock_fd,
+            args.export_tiles,
+        )
     elif args.command == "train-fullframes":
         from .crop_finetune import run
 
@@ -276,6 +299,7 @@ def main():
             args.workers,
             args.lock_fd,
             args.min_gain,
+            runs=args.runs,
         )
     elif args.command == "evaluate-score":
         from .score_improvement import run

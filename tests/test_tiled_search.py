@@ -7,15 +7,16 @@ import pytest
 import torch
 
 from cvlab import tiled_search
-from cvlab.common import digest
+from cvlab.common import digest, write_json, read_json
 from test_tiled_inference import SimpleDetector, competition
 
 
 @pytest.mark.parametrize(
     "full_score,improved", [(0.3, True), (0.11, True), (0.103, False), (0.05, False)]
 )
+@pytest.mark.parametrize("custom_run", [False, True])
 def test_search_uses_full_holdout_and_real_tiled_export(
-    tmp_path, monkeypatch, full_score, improved
+    tmp_path, monkeypatch, full_score, improved, custom_run
 ):
     from cvlab import engine, metrics, prepare, submit_cpu
 
@@ -68,14 +69,39 @@ def test_search_uses_full_holdout_and_real_tiled_export(
     monkeypatch.setattr(engine, "predict", baseline)
     monkeypatch.setattr(metrics, "evaluate", evaluate)
     monkeypatch.setattr(tiled_search, "full_validation", full_baseline)
+    previous = {
+        "models": [
+            {
+                "model": "rtdetr",
+                "checkpoint_sha256": "previous-sha",
+                "full_candidate": {
+                    "checkpoint_sha256": "previous-sha",
+                    "record_ids": [0, 1],
+                    "data_fingerprint": digest(records),
+                    "metrics": {"coco100": {"mAP": 0.15}},
+                },
+            }
+        ]
+    }
+    if custom_run:
+        write_json(tmp_path / "score_improvement/tiling_summary.json", previous)
     with (tmp_path / ".local_gpu_queue.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         result = tiled_search.run(
-            tmp_path, ["rtdetr"], [64], [0.5], 1, 6, 0, os.dup(lock.fileno())
+            tmp_path,
+            ["rtdetr"],
+            [64],
+            [0.5],
+            1,
+            6,
+            0,
+            os.dup(lock.fileno()),
+            runs=["rtdetr_iterative_finetune"] if custom_run else None,
         )
     entry = result["models"][0]
     assert entry["subset_winner"]["strategy"] == "tiles"
     assert entry["full_candidate"]["record_ids"] == [0, 1]
+    improved = improved and (not custom_run or full_score >= 0.16)
     if improved:
         assert Path(entry["submission"]).is_file()
         assert "Full-validation improvement" in entry["outcome"]
@@ -83,6 +109,10 @@ def test_search_uses_full_holdout_and_real_tiled_export(
         assert "submission" not in entry
         assert "below export threshold" in entry["outcome"]
     assert entry["minimum_full_validation_gain"] == 0.01
+    if custom_run:
+        assert entry["export_reference"]["mAP"] == 0.15
+        assert read_json(tmp_path / "score_improvement/tiling_summary.json") == previous
+        assert (tmp_path / "score_improvement/tiling_finetune_summary.json").is_file()
 
 
 def test_tiling_launcher_inherits_gpu_lease_and_rejects_duplicates(

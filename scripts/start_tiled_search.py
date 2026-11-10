@@ -10,11 +10,15 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path)
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--models",
         nargs="+",
         default=["rtdetr", "fasterrcnn"],
         choices=["rtdetr", "fasterrcnn", "fcos", "retinanet"],
+    )
+    selection.add_argument(
+        "--runs", nargs="+", help="Specific trained run paths or names under work/runs"
     )
     parser.add_argument("--tile-sides", nargs="+", type=int, default=[768, 960])
     parser.add_argument("--ious", nargs="+", type=float, default=[0.5, 0.6])
@@ -52,8 +56,11 @@ def main():
                     str(work),
                     "--lock-fd",
                     str(lease.fileno()),
-                    "--models",
-                    *args.models,
+                    *(
+                        ["--runs", *args.runs]
+                        if args.runs
+                        else ["--models", *args.models]
+                    ),
                     "--tile-sides",
                     *map(str, args.tile_sides),
                     "--ious",
