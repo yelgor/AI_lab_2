@@ -515,3 +515,13 @@ To request a stop after the current round, create
 further exports/rounds when it sees the file. Remove it before continuing. Repeating
 the launcher resumes the experiment. Specific runs can also use the existing tiled
 launcher directly: `--runs rtdetr_iterative_finetune --tile-sides 960 --ious 0.6`.
+
+### Audit a regressing tiled submission
+
+The user-observed `rtdetr_cc3d87b1034f_960_tiles_b57dbbdfb3d4.csv` public score
+`0.1746973387` regressed from `0.1928780288`. This is not a confirmed improvement.
+`scripts/audit_tiled_candidate.py --work "$WORK"` performs a read-only CPU comparison
+of those two CSVs: exported checksum, checkpoint SHA, tile options, test fingerprint,
+class/score distributions, source frozen run, complete native/tiled COCO100/500 scores,
+per-class AP and the recorded export-selection reference. Missing artifacts are reported;
+the script does not infer an unseen export provenance from training logs alone.

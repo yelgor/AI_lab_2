@@ -42,6 +42,18 @@
       "public_score": 0.1928780288,
       "evidence": "User-provided Kaggle submission screenshot on 2026-11-10",
       "baseline_exceeded": false
+    },
+    {
+      "file": "rtdetr_cc3d87b1034f_960_tiles_b57dbbdfb3d4.csv",
+      "model": "rtdetr",
+      "checkpoint_sha256_prefix": "cc3d87b1034f",
+      "image_size": 960,
+      "inference": "global plus tiled",
+      "public_score": 0.1746973387,
+      "evidence": "User-provided Kaggle submission screenshot on 2026-11-10",
+      "baseline_exceeded": false,
+      "regression_vs_best_public": 0.01818069009999998,
+      "status": "Rejected as a public-score improvement; provenance audit pending"
     }
   ]
 }

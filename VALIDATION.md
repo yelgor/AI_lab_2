@@ -172,3 +172,13 @@ tiling cases in the full regression suite verify full-holdout confirmation again
 previous tiled reference and preservation of the old report, with real geometry/CSV export.
 Ruff, CLI help and shell launch syntax checks passed. GPU allocator APIs use CPU mocks;
 actual CUDA throughput and any new VisDrone/Kaggle gains remain unmeasured here.
+
+### Regressing candidate provenance audit
+
+The reported public score `0.1746973387` is recorded as a regression, with its source
+checkpoint prefix and screenshot evidence. A standalone standard-library audit was
+smoke-checked on temporary CSV/metadata/cache fixtures: class counts, empty rows,
+confidence counts, full COCO500 cache extraction, unchanged-CSV checksum equality,
+changed-CSV checksum rejection and missing-file reporting. Ruff passes. The actual
+candidate's local selection reports have not been supplied; the export reference and
+root cause remain unverified. No additional GPU training is required by this audit.
