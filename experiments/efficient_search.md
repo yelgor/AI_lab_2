@@ -1,7 +1,16 @@
 # Bounded warm-start search
 
-This is a technical experiment protocol, not the homework report. The verified
-public reference remains RT-DETR `a7cd89fb349d`: tiled Kaggle AP 0.1928780288.
+**Protocol update (2026-11-11):** the user now targets public score **0.28+**
+and requests full-data coverage, including train+val for the final fit after
+independent model selection. Read [the new full-data protocol](../docs/full_data_protocol.md)
+and [coordination notes](../docs/AGENT_COORDINATION.md) before launching another
+recipe. The implementation described below remains the original fold-based racer;
+this documentation update does not change a running process or implement the new
+sampler/final-fit mode. The newest observed public-best is **0.1967910091** for
+`rtdetr_51bc69d304b8_efficient_tiles.csv`; `a7cd89fb349d` is a historical fallback.
+
+This is a technical experiment protocol, not the homework report. The original
+public reference for this recipe was RT-DETR `a7cd89fb349d`: tiled Kaggle AP 0.1928780288.
 The target is 0.2216324580. An accepted local checkpoint is not a verified public
 improvement. Keep the original weights and submission throughout the search.
 
@@ -91,7 +100,7 @@ the runner does not submit to Kaggle or infer public scores automatically.
 ## Run and inspect
 
 ```bash
-WORK="/media/hordii/FE7632097631C2E7/AI_lab_2_work"
+WORK="${CVLAB_LOCAL_WORK:?Set CVLAB_LOCAL_WORK to your actual work directory}"
 .venv/bin/python -u scripts/start_efficient_search.py \
   --work "$WORK" --hours 4 --reserve-hours 1 --cycles 1 --export-tiles
 ```

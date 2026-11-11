@@ -6,7 +6,8 @@
    і, для точних формулювань, [повний текст](docs/assignment/kaggle-original.txt).
 2. [Поточні завдання та відповіді агентів](docs/AGENT_COORDINATION.md).
 3. [Коли CSV готовий до подання](docs/submission_protocol.md).
-4. Для локального виконання — [watchdog](docs/local_watchdog.md) та
+4. [Оновлений протокол повних даних і ціль 0.28+](docs/full_data_protocol.md).
+5. Для локального виконання — [watchdog](docs/local_watchdog.md) та
    [протокол ефективного пошуку](experiments/efficient_search.md).
 
 ## Режим спільної роботи
@@ -58,5 +59,8 @@ Git-push за розкладом тут немає; не додавати йог
 повідомлення; він не відправляє CSV на Kaggle. Доручення описати готовність не
 означає, що CSV уже подано. Позначати SUBMITTED/SCORED лише за фактичною
 відповіддю Kaggle. Ціль public baseline — `0.2216324580`; досягнення підтверджує
-оцінка самого змагання. Актуальні спостереження — в
+оцінка самого змагання. Нова робоча ціль користувача — `0.28+`; її не підміняти
+формальним baseline або вже отриманим score. Для фінального навчання повних
+train+val застосовувати окремий протокол, а не contaminated fold-validation.
+Актуальні спостереження — в
 `experiments/leaderboard_results.json`.
