@@ -554,3 +554,26 @@ bicycle — 2,631; bus recall при цьому порозі 0.136. Є до тр
 Далі: звільнити місце до admission-порогу та відновити writable data/work
 storage; зберегти STOP до нового source-bound плану з class/family gates.
 Фінальний train+val лишається без незалежної validation-оцінки.
+
+
+### Новий c1 batch-2 selection — 2026-11-12, 19:25 EET
+
+Після виміряного GPU throughput запущено окремий `c1_batch2` plan від незмінного
+source SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`:
+24,201 train frames на кожен із двох повних selection epochs, physical batch=2,
+accumulation=2 (effective batch 4), full official validation і далі tiled
+source-bound gates. Фінальний `train+val` output має свій STOP, тож цей запуск
+його не починає. Раніше завершений `c1_continuation` і public-best артефакти
+залишені без змін.
+
+На 19:25 служба `cvlab-c1-batch2` активна, CUDA preflight і читання ваг/data
+пройшли. Йде full-validation baseline перед першою епохою; перших train batches,
+loss і measured FPS ще немає. GPU був активно зайнятий, температура безпечна;
+RAM доступна вище 4 GiB тренера, диск вище 8 GiB admission порогу. NTFS data
+volume лишається read-only, але модель читає його; робочі виходи — на writable
+Linux work. Watchdog перейшов у `monitor`; початковий quiet-process сигнал
+викликаний його старим log path. Запущено локальне журналювання systemd unit у
+`WORK/logs/c1_batch2_training.log`, аби наступні stall/progress перевірки бачили
+новий процес. Після baseline стежити за frame/batch прогресом, VRAM/RAM/swap,
+температурою, вільним місцем і checkpoint-ами; оцінювати тільки повну validation
+та tiled family/class gates. Немає нового CSV чи Kaggle score.
