@@ -110,10 +110,11 @@ def run_case(
     effective_batch,
 ):
     config = copy.deepcopy(config)
+    adapter = copy.deepcopy(checkpoint.get("adapter"))
     config["loader"]["batch_size"] = batch_size
     config["train"]["accumulation"] = effective_batch // batch_size
     model = build_model(
-        config["model"], checkpoint.get("adapter"), initialize_pretrained=False
+        config["model"], adapter, initialize_pretrained=False
     ).to(device)
     model.load_state_dict(checkpoint["model"])
     optimizer = make_optimizer(model, config["train"])
