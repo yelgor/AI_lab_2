@@ -521,3 +521,36 @@ final train+val не запускався. Наступне рішення: зб
 plan наздогнати throughput batch2, але запускати лише з robust source-bound gates,
 збереженим STOP для final-fit і writable storage. OOF/public score не виводити з
 цього benchmark.
+
+
+### Локальний стан, аудит і failure diagnostics — 2026-11-12, 18:25 EET
+
+Перевірено безпосередньо на локальній машині: навчальних/validation-процесів
+немає; CUDA доступна, compute GPU вільний. User-служби `cvlab-watchdog.service`
+і `.timer` встановлені та активні; watchdog продовжує внутрішню перевірку раз
+на 60 с. Його поточний стан — `paused` через checkpoint-boundary STOP;
+збережено STOP для `rtdetr_c1_continuation_final` і `rtdetr_full_data_final`.
+Старий загальний часовий бюджет завершився 2026-11-11. Новий запуск не
+допускається політикою watchdog: runtime work має близько 7.25 GiB вільного
+місця при мінімумі 8 GiB. Підготовлений data volume досі read-only. Checkpoints
+не змінювалися й не видалялися.
+
+CPU audit `scripts/check_lab.py` для фактичного data work підтвердив
+`train/val/test/folds` під `prepared/`; окремий runtime audit очікувано не має
+копії `prepared/`. EDA summaries уже існують: train — 24,201 кадр / 1,105,516
+об'єктів, validation — 2,846 / 114,132; класи нерівномірні (validation bus —
+264 об'єкти, train bus — 9,653). Поточні локальні таблиці failure diagnostics
+для checkpoint `224c8cc6f9877a4cb4196c2ec514527964cf18c4f9a8d85031fc09cc234c8f9d`
+збережені в `WORK/diagnostics/c1_native_failure_audit/`: `class_counts_iou50_score025.csv`,
+`examples_by_error_and_class.csv`, `README.json`. Вони покривають усі 2,846
+validation кадрів і дають фіксований поріг score=0.25, IoU=0.5; це описова
+діагностика, не AP і не незалежна оцінка, бо ця cohort брала участь у відборі.
+Найбільші помилки за таблицею: motor має 5,346 wrong-class FP, van — 3,131,
+bicycle — 2,631; bus recall при цьому порозі 0.136. Є до трьох різних family
+прикладів на клас/тип помилки. Prediction cache — повний, 2,846 image IDs.
+
+Останній записаний tiled confirmation у watchdog/log — local mAP `0.198893`;
+це не Kaggle score. Не створено нового READY CSV і не подано нічого на Kaggle.
+Далі: звільнити місце до admission-порогу та відновити writable data/work
+storage; зберегти STOP до нового source-bound плану з class/family gates.
+Фінальний train+val лишається без незалежної validation-оцінки.
