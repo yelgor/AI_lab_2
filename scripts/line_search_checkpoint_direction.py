@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from cvlab.common import CLASSES, read_json, write_json
+from cvlab.common import read_json, write_json
 from cvlab.engine import predict, setup
 from cvlab.metrics import evaluate
 from cvlab.models import build_model

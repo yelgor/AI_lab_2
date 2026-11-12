@@ -29,6 +29,12 @@ by at least `0.001` against the source checkpoint under the fixed tiled settings
 (960 tile, 0.2 overlap, NMS 0.6, edge margin 2). An exported CSV still needs a
 fresh Kaggle evaluation to establish whether public score improved.
 
+Update 2026-11-12: [robust selection](../docs/selection_policy.md) supersedes
+pooled-gain-only export. Both full comparisons must also pass family and class
+guards. Baseline is now measured/cached from the actual source checkpoint;
+hard-coded baseline reports are not used. Supervised validation exposure of
+both endpoints is checked before inference.
+
 Limitations: the line search uses one observed update vector; the 512-frame probe
 and full official validation share the same seven video families; public score
 feedback is sparse; the Kaggle evaluation implementation has not been verified
@@ -39,10 +45,13 @@ against local COCO100. Do not reuse the regressed endpoint as a training source.
 Set `CVLAB_LOCAL_WORK` to the configured local work directory. The source and
 candidate checkpoints must both be readable; work storage must be writable and
 have space for one checkpoint and a CSV. The script acquires
-`$CVLAB_LOCAL_WORK/.local_gpu_queue.lock` and blocks system sleep for the run.
+`$CVLAB_LOCAL_WORK/.local_gpu_queue.lock`. The caller must provide sleep/lid
+protection; the Python script itself only acquires the GPU lease.
 
 ```bash
-.venv/bin/python -u scripts/export_c1_interpolated_candidate.py \
+systemd-inhibit --what=sleep:idle:handle-lid-switch --mode=block \
+  --why="C1 candidate evaluation" \
+  .venv/bin/python -u scripts/export_c1_interpolated_candidate.py \
   --work "$CVLAB_LOCAL_WORK" \
   --source "$CVLAB_LOCAL_WORK/source_c1d7fcc83dde/best.pt" \
   --candidate "$CVLAB_LOCAL_WORK/runs/rtdetr_c1_continuation_train_selection/best.pt" \
@@ -50,7 +59,7 @@ have space for one checkpoint and a CSV. The script acquires
 ```
 
 Output is grouped under
-`$CVLAB_LOCAL_WORK/runs/rtdetr_c1_path_alpha_0.500/`; the report is written
+`$CVLAB_LOCAL_WORK/runs/rtdetr_c1_path_<source-target-alpha-digest>/`; the report is written
 after native validation and again after tiled validation. A passing run writes
 the new file under `$CVLAB_LOCAL_WORK/submissions/`. A failure of either full
 validation gate leaves a report and checkpoint but creates no submission.

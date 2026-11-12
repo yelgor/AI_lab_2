@@ -1,4 +1,3 @@
-import copy
 import json
 from pathlib import Path
 
@@ -74,7 +73,9 @@ def test_full_data_controller_runs_both_real_training_phases_and_does_not_repeat
 
     def score(work, checkpoint, config, records, **kwargs):
         assert len(records) == 2  # Full official validation, no fold/probe.
-        return {"metrics": {"coco100": {"mAP": 0.2 if checkpoint.parent == source else 0.21}}}
+        value = 0.2 if checkpoint.parent == source else 0.21
+        return {"metrics": {"coco100": {"mAP": value, "per_class": {"person": value}},
+                            "per_video_mAP": {str(i): value for i in range(4)}}}
 
     def export(model, config, records, device, options, path, checkpoint_sha):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +93,7 @@ def test_full_data_controller_runs_both_real_training_phases_and_does_not_repeat
     def tiny_recipe(*args, **kwargs):
         config = real_recipe(*args, **kwargs)
         config["loader"].update(workers=0, pin_memory=False)
+        config["evaluation"]["robust_selection"] = False
         return config
     monkeypatch.setattr(full_data, "recipe", tiny_recipe)
     state = run(work, source, selection_epochs=1, final_epochs=1)
@@ -106,3 +108,33 @@ def test_full_data_controller_runs_both_real_training_phases_and_does_not_repeat
     assert checkpoint["best"] is None
     assert sha256(source / "best.pt") == original_sha
     assert run(work, source, selection_epochs=1, final_epochs=1) == state
+
+
+def test_recorded_public_regression_is_rejected_before_training(tmp_path, monkeypatch):
+    from cvlab import full_data
+
+    monkeypatch.setattr(full_data, "sha256", lambda p: "224c8cc6f9877a4cb4196c2ec514527964cf18c4f9a8d85031fc09cc234c8f9d")
+    with pytest.raises(ValueError, match="rejected training source"):
+        full_data.run(tmp_path, tmp_path / "rejected_source")
+
+
+def test_harmful_update_stops_before_another_full_epoch(tmp_path, monkeypatch):
+    from cvlab import engine, full_data
+    import time
+
+    output = tmp_path / "selection"
+    config = {"output": str(output), "data": {"split": "official"},
+              "train": {"epochs": 2}, "evaluation": {}}
+    calls = []
+    def train(*args, **kwargs):
+        calls.append(kwargs)
+        write_json(output / "coverage_epoch_0000.json", {"unique_frames": 10})
+        (output / "history.jsonl").write_text(json.dumps({
+            "epoch": 0, "train_batches": 10,
+            "selection_decision": {"accepted": False, "reasons": ["class_regression"]},
+        }) + "\n")
+    monkeypatch.setattr(engine, "train", train)
+    assert not full_data.full_epochs(config, tmp_path / "source.pt", 10, time.time() + 60)
+    assert len(calls) == 1 and (output / "selection_halt.json").is_file()
+    assert not full_data.full_epochs(config, tmp_path / "source.pt", 10, time.time() + 60)
+    assert len(calls) == 1  # An automatic restart cannot silently continue the rejected recipe.

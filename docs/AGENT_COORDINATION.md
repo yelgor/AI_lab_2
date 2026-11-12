@@ -407,3 +407,48 @@ current job. This review changes no laptop process and triggers no GPU launch or
 automatic submission. Local agent: report the active plan/source SHA, completed
 phase timings/cache hits, and which review items were applied before the next
 training launch.
+
+### Stronger selection and lab audit implemented — web Codex, 2026-11-12
+
+Implemented the user's requested replacement of pooled-AP/weight-direction
+promotion. See [selection protocol](selection_policy.md) and
+[laboratory evidence checklist](LAB_PROGRESS.md). Full-data `best.pt` now needs
+distributed flight-level improvement, positive approximate family-bootstrap
+lower gain, class/size regression limits and leave-one-family-out support.
+Efficient-search confirmation and interpolation export use the same guards.
+Known public regressions are blocked by checkpoint identity. Legacy AP-only
+reports cannot authorize new export/final fit; preserve their evidence.
+
+Shared evaluator receipts reuse committed native training validation, including
+the original source identity, and avoid repeated GPU inference only when exact
+weights/records/inference/software match. Interpolation measures its actual
+baseline, checks inherited exposure and uses immutable endpoint-specific output.
+Full-data harmful epoch updates write a persistent `selection_halt.json`; a
+restart cannot quietly continue the rejected recipe. The old auto-launch
+watchdog monitors healthy work but cannot fall back to the previous search when
+a named full-data plan has recorded status. The dedicated approved-plan service
+must own c1 continuation. Lightweight monitoring accepts the actual log/state.
+
+Local agent: apply at the next safe saved boundary, preserving active healthy
+work, GPU lease, original c1 weights and prior CSVs. Inspect the current owner,
+actual plan/source SHA and storage first. Do not blindly rerun the old two-epoch
+plan or clear its STOP/halt after a quality rejection. Reassess existing committed
+metrics under the new guards before spending another epoch. A new controlled
+recipe gets a new plan, retaining learned c1 initialization and compatible
+optimizer state. Do not launch a broad alpha grid from the rejected endpoint.
+Exact competition metric parity is still unknown. These guards do not guarantee
+0.28+; record actual independent measurements and later observed Kaggle scores.
+
+Local audit command: `python3 scripts/check_lab.py --work "$CVLAB_LOCAL_WORK"
+--out "$CVLAB_LOCAL_WORK/checks/status.json"`. It reads metadata/current process
+argv without tensor loading and flags inherited flight-family leakage. Report
+which baseline/tuning/loss runs, comparable metrics, failure examples and actual
+OOF outputs exist; configs alone do not fulfill those requirements. Keep raw
+runtime status local. The academic report must be written by the students.
+
+Validation: final full CPU suite passed, 307 tests; Ruff and diff whitespace
+checks passed. Tests cover real tiny warm-start cache reuse, rejection of
+one-flight/class regressions, identity-separated interpolation, source rejection,
+restart halt, inherited leakage and watchdog ownership. No live laptop training
+or GPU execution was performed by the web session. Mid-epoch sampler recovery
+and hard full-epoch deadlines remain unimplemented.

@@ -317,6 +317,8 @@ def test_full_confirmation_requires_native_and_tiled_gains(
     candidate = tmp_path / "candidate"
     config = load_config(Path(__file__).parents[1] / "configs/rtdetr.yaml")
     for folder in (original, candidate):
+        (folder / "best.pt").parent.mkdir(parents=True, exist_ok=True)
+        (folder / "best.pt").write_bytes(folder.name.encode())
         write_json(folder / "config.json", config)
         write_json(folder / "split.json", {"train_sequences": ["training_flight"]})
     monkeypatch.setattr(
@@ -334,7 +336,8 @@ def test_full_confirmation_requires_native_and_tiled_gains(
             if checkpoint.parent == original
             else (tiled_score if tiled else native)
         )
-        return {"metrics": {"coco100": {"mAP": value}}}
+        return {"metrics": {"coco100": {"mAP": value, "per_class": {"person": value}},
+                            "per_video_mAP": {str(i): value for i in range(4)}}}
 
     tiled_score = tiled
     monkeypatch.setattr(search, "_score", score)
@@ -350,6 +353,8 @@ def test_confirmation_filters_related_and_inherited_families(tmp_path, monkeypat
     candidate = tmp_path / "candidate"
     config = load_config(Path(__file__).parents[1] / "configs/rtdetr.yaml")
     for folder in (original, candidate):
+        (folder / "best.pt").parent.mkdir(parents=True, exist_ok=True)
+        (folder / "best.pt").write_bytes(folder.name.encode())
         write_json(folder / "config.json", config)
         write_json(folder / "split.json", {
             "train_sequences": ["uav1_a"],
@@ -403,7 +408,7 @@ def test_wall_budget_commits_partial_training_instead_of_killing_process(
 def test_confirmation_cache_is_bound_to_weights_records_and_inference(
     tmp_path, monkeypatch
 ):
-    from cvlab import score_improvement
+    from cvlab import engine, sequential_policy, metrics
 
     original = tmp_path / "runs/rtdetr_fold0_local"
     original.mkdir(parents=True)
@@ -413,11 +418,16 @@ def test_confirmation_cache_is_bound_to_weights_records_and_inference(
     write_json(original / "config.json", config)
     calls = []
 
-    def validate(*args):
+    def validate(*args, **kwargs):
         calls.append(args)
-        return {"metrics": {"coco100": {"mAP": 0.2}}}
+        return [], {}
 
-    monkeypatch.setattr(score_improvement, "full_validation", validate)
+    monkeypatch.setattr(engine, "setup", lambda *a: "cpu")
+    monkeypatch.setattr(engine, "load_trained", lambda *a: object())
+    monkeypatch.setattr(engine, "predict", validate)
+    monkeypatch.setattr(metrics,
+                        "evaluate", lambda *a: {"coco100": {"mAP": 0.2}})
+    monkeypatch.setattr(sequential_policy, "per_video_scores", lambda *a: {"held_out": 0.2})
     records = [{"id": 1, "sequence_id": "held_out"}]
     search._score(tmp_path, checkpoint, config, records)
     search._score(tmp_path, checkpoint, config, records)

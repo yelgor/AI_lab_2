@@ -2,7 +2,6 @@
 
 import argparse
 import fcntl
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -12,12 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 from cvlab.common import read_json, write_json
-from cvlab.engine import predict, setup
+from cvlab.engine import setup
 from cvlab.full_data import sha256
-from cvlab.metrics import evaluate
 from cvlab.models import build_model
 from cvlab.prepare import select_records
-from cvlab.tiled_inference import TileOptions, export_tiled, predict_tiled
+from cvlab.tiled_inference import TileOptions, export_tiled
 
 
 def interpolate(source, target, alpha):
@@ -48,96 +46,84 @@ def main():
     work, source_path, target_path = map(
         lambda p: p.resolve(), (args.work, args.source, args.candidate)
     )
-    output_dir = work / "runs" / f"rtdetr_c1_path_alpha_{args.alpha:.3f}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "report.json"
-    checkpoint_path = output_dir / "interpolated.pt"
 
     lease = (work / ".local_gpu_queue.lock").open("a")
     print("Waiting for the shared GPU lease", flush=True)
     fcntl.flock(lease, fcntl.LOCK_EX)
 
+    from cvlab.common import digest
+    from cvlab.efficient_search import _score, full_config
+    from cvlab.selection_policy import PROTOCOL, assess_metrics, require_training_source
+
     source_sha, target_sha = sha256(source_path), sha256(target_path)
+    require_training_source(source_sha)
     source_ckpt = torch.load(source_path, map_location="cpu", weights_only=False)
     target_ckpt = torch.load(target_path, map_location="cpu", weights_only=False)
     if source_ckpt["config"]["model"] != target_ckpt["config"]["model"]:
         raise ValueError("Checkpoint model configurations differ")
     if source_ckpt.get("adapter") != target_ckpt.get("adapter"):
         raise ValueError("Checkpoint adapter metadata differs")
-    adapter = target_ckpt.get("adapter")
-    checkpoint = {
-        "model": interpolate(source_ckpt["model"], target_ckpt["model"], args.alpha),
-        "config": target_ckpt["config"],
-        "adapter": target_ckpt.get("adapter"),
-        "interpolation": {
-            "source_sha256": source_sha,
-            "target_sha256": target_sha,
-            "alpha": args.alpha,
-        },
-    }
-    torch.save(checkpoint, checkpoint_path)
-    del source_ckpt, target_ckpt, checkpoint
-    interpolated_sha = sha256(checkpoint_path)
+    from cvlab.sequential_policy import assert_family_isolation
 
-    config = read_json(target_path.parent / "config.json")
-    config["data"]["split"] = "official"
-    config["loader"].update(
-        batch_size=1, workers=2, pin_memory=True, persistent_workers=False,
-        prefetch_factor=1,
-    )
-    config["runtime"].update(device="cuda", precision="fp16", cpu_threads=2)
+    config = full_config(target_ckpt["config"], official=True)
+    records = select_records(config, "val")
+    seen = set()
+    for saved, path in ((source_ckpt, source_path), (target_ckpt, target_path)):
+        exposure = saved.get("seen_training_sequences")
+        if exposure is None:
+            split_path = path.parent / "split.json"
+            split = read_json(split_path)
+            if not saved.get("data_fingerprint") or split.get("fingerprint") != saved["data_fingerprint"]:
+                raise ValueError("Cannot verify inherited training exposure")
+            exposure = set(split["train_sequences"]) | set(split.get("seen_training_sequences", []))
+        seen.update(exposure)
+    assert_family_isolation([], records, seen)
+    provenance = {"source_sha256": source_sha, "target_sha256": target_sha, "alpha": args.alpha}
+    # Different endpoints cannot overwrite the same alpha-named checkpoint/report.
+    output_dir = work / "runs" / f"rtdetr_c1_path_{digest(provenance)[:12]}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path, checkpoint_path = output_dir / "report.json", output_dir / "interpolated.pt"
+    adapter = target_ckpt.get("adapter")
+    if checkpoint_path.exists():
+        existing = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if existing.get("interpolation") != provenance:
+            raise ValueError("Existing interpolated checkpoint has different provenance")
+        del existing
+    else:
+        checkpoint = {
+            "model": interpolate(source_ckpt["model"], target_ckpt["model"], args.alpha),
+            "config": target_ckpt["config"], "adapter": adapter, "interpolation": provenance,
+            "seen_training_sequences": sorted(seen),
+        }
+        temporary = checkpoint_path.with_suffix(".tmp")
+        torch.save(checkpoint, temporary)
+        temporary.replace(checkpoint_path)
+        del checkpoint
+    del source_ckpt, target_ckpt
+    interpolated_sha = sha256(checkpoint_path)
+    require_training_source(interpolated_sha)
+    report = {
+        "selection_protocol": PROTOCOL, "alpha": args.alpha,
+        "source_checkpoint_sha256": source_sha, "target_checkpoint_sha256": target_sha,
+        "interpolated_checkpoint_sha256": interpolated_sha,
+        "frames": len(records), "data_fingerprint": digest(records), "csv": None,
+    }
+    for tiled, phase in ((False, "native"), (True, "tiled")):
+        baseline = _score(work, source_path, config, records, tiled=tiled)
+        measured = _score(work, checkpoint_path, config, records, tiled=tiled)
+        decision = assess_metrics(baseline["metrics"], measured["metrics"])
+        report[phase] = {"baseline": baseline, "candidate": measured, "decision": decision}
+        write_json(report_path, report)
+        print(json.dumps({"phase": phase, **decision}), flush=True)
+        if not decision["accepted"]:
+            report["decision"] = "rejected_by_robust_validation"
+            write_json(report_path, report)
+            print(f"REJECTED before further GPU work: {decision['reasons']}", flush=True)
+            return
     device = setup(config)
     model = build_model(config["model"], adapter, initialize_pretrained=False).to(device)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=False)["model"])
-
-    records = select_records(config, "val")
-    baseline = read_json(work / "full_data" / "c1_continuation" / "selection_report.json")
-    report = {
-        "method": "linear interpolation along the observed source-to-candidate update vector",
-        "alpha": args.alpha,
-        "source_checkpoint_sha256": source_sha,
-        "target_checkpoint_sha256": target_sha,
-        "interpolated_checkpoint_sha256": interpolated_sha,
-        "frames": len(records),
-        "data_fingerprint": baseline["data_fingerprint"],
-        "baseline_native_AP": baseline["baseline_native_AP"],
-        "baseline_tiled_AP": baseline["baseline_tiled_AP"],
-        "native": None,
-        "tiled": None,
-        "csv": None,
-    }
-
-    native_predictions, native_timing = predict(model, config, records, device)
-    native_metrics = evaluate(records, native_predictions, [100, 500])
-    report["native"] = {
-        "metrics": native_metrics,
-        "timing": native_timing,
-        "gain": native_metrics["coco100"]["mAP"] - report["baseline_native_AP"],
-    }
-    write_json(report_path, report)
-    print(json.dumps({"phase": "native", "mAP": native_metrics["coco100"]["mAP"],
-                      "gain": report["native"]["gain"]}), flush=True)
-    del native_predictions, native_metrics
-
     options = TileOptions(960, overlap=0.2, nms_iou=0.6, edge_margin=2, workers=2)
-    tiled, tiled_timing = predict_tiled(model, config, records, device, options)
-    tiled_metrics = evaluate(records, tiled[0.6], [100, 500])
-    report["tiled"] = {
-        "metrics": tiled_metrics,
-        "timing": tiled_timing,
-        "gain": tiled_metrics["coco100"]["mAP"] - report["baseline_tiled_AP"],
-        "options": {"tile_side": 960, "overlap": 0.2, "nms_iou": 0.6, "edge_margin": 2},
-    }
-    write_json(report_path, report)
-    print(json.dumps({"phase": "tiled", "mAP": tiled_metrics["coco100"]["mAP"],
-                      "gain": report["tiled"]["gain"]}), flush=True)
-    del tiled
-
-    if report["native"]["gain"] < 0.001 or report["tiled"]["gain"] < 0.001:
-        report["decision"] = "rejected_by_full_validation_gates"
-        write_json(report_path, report)
-        print(f"REJECTED: full validation gains below gate; see {report_path}", flush=True)
-        return
 
     test_records = select_records(config, "test")
     csv_path = work / "submissions" / (
@@ -156,8 +142,8 @@ def main():
         target_checkpoint_sha256=target_sha,
         interpolation_alpha=args.alpha,
         validation_report=str(report_path),
-        full_validation_native_gain=report["native"]["gain"],
-        full_validation_tiled_gain=report["tiled"]["gain"],
+        full_validation_native_gain=report["native"]["decision"]["pooled_gain"],
+        full_validation_tiled_gain=report["tiled"]["decision"]["pooled_gain"],
     )
     write_json(metadata_path, metadata)
     report["decision"] = "ready_for_manual_kaggle_evaluation"

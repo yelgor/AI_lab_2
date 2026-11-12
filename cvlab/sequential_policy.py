@@ -101,6 +101,9 @@ def survivors(observations, keep, next_budget, min_gain=0.001):
         item
         for item in observations
         if item["evidence"]["families"] >= 4 and item["evidence"]["upper"] > -min_gain
+        and not set(item.get("probe_decision", {}).get("reasons", [])) & {
+            "class_regression", "family_regression", "small_object_regression",
+        }
     ]
 
     def utility(item):
@@ -117,6 +120,8 @@ def survivors(observations, keep, next_budget, min_gain=0.001):
 
 def promotable(observation, min_gain=0.001):
     return (
+        observation.get("probe_decision", {"accepted": True})["accepted"]
+        and
         observation["evidence"]["families"] >= 4
         and observation["evidence"]["lower"] > 0
         and observation["global_gain"] >= min_gain

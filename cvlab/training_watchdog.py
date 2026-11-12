@@ -231,7 +231,8 @@ def snapshot(config, state):
         "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
     }
     if writable:
-        full_data = read_json(work / "full_data/state.json", {})
+        plans = list((work / "full_data").glob("**/state.json"))
+        full_data = read_json(max(plans, key=lambda p: p.stat().st_mtime), {}) if plans else {}
         result["full_data"] = {
             key: full_data[key] for key in ("status", "data", "joint_manifest", "submission")
             if key in full_data
@@ -321,6 +322,8 @@ def decide(config, state, sample, now):
     """Pure scheduling policy. Never signals/kills a live training process."""
     if sample.get("job_alive") or sample["roots"]:
         return "monitor", "Training or validation process is active"
+    if sample.get("full_data", {}).get("status"):
+        return "paused", "Full-data plan owns training; legacy efficient-search auto-launch is disabled"
     if sample["stop"]:
         return "paused", "Checkpoint-boundary pause requested"
     if not sample["mounted"] or not sample["writable"]:

@@ -589,6 +589,11 @@ def train(
         atomic_checkpoint(output / "best.pt", initial_payload)
         write_json(output / "best_metrics.json", initial_log)
         write_json(output / "initial_validation.json", initial_log)
+        from .evaluation_receipts import save_training_evaluation
+
+        save_training_evaluation(config, validation, initial_scores, initial_timing,
+                                 [output / "last.pt", output / "best.pt"]
+                                 + ([Path(init_checkpoint)] if init_checkpoint else []))
         del initial_predictions, initial_payload
         print(f"Initial validation mAP={best:.4f}", flush=True)
 
@@ -775,8 +780,10 @@ def train(
         score = scores["coco100"]["mAP"]
         if score is None:
             raise ValueError("Validation has no evaluable target objects")
-        improved = score > best
-        best = max(best, score)
+        from .selection_policy import choose_checkpoint
+
+        improved, selection_decision = choose_checkpoint(config, output, scores, best)
+        best = score if improved else best
         elapsed = elapsed_before + time.perf_counter() - started
         log = {
             "epoch": epoch,
@@ -788,6 +795,7 @@ def train(
             "metrics": scores,
             "timing": timing,
             "lr": [g["lr"] for g in optimizer.param_groups],
+            "selection_decision": selection_decision,
         }
         with (output / "history.jsonl").open("a") as stream:
             stream.write(json.dumps(log, allow_nan=False) + "\n")
@@ -810,6 +818,10 @@ def train(
                     "data_fingerprint": digest(validation),
                 },
             )
+        from .evaluation_receipts import save_training_evaluation
+
+        save_training_evaluation(config, validation, scores, timing,
+                                 [output / "last.pt"] + ([output / "best.pt"] if improved else []))
         # Do not retain one full validation output while collecting the next.
         del predictions
         print(

@@ -101,6 +101,13 @@ def test_cycle_limit_counts_new_cycles_only(config, sample):
     assert wd.decide(config, state, sample, 100)[0] == "finished"
 
 
+def test_full_data_plan_prevents_silent_fallback_to_legacy_search(config, sample):
+    sample["full_data"] = {"status": "selection_rejected"}
+    assert wd.decide(config, {}, sample, 100)[0] == "paused"
+    sample["roots"] = [{"pid": 123}]
+    assert wd.decide(config, {}, sample, 100)[0] == "monitor"
+
+
 def test_bounded_retries_and_cuda_recovery_only_after_reboot(config, sample):
     state = {}
     job = {"returncode": 137, "reason": "killed_or_oom"}

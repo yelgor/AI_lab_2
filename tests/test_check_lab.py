@@ -144,3 +144,28 @@ def test_import_does_not_load_torch_or_numpy():
         ],
         check=True,
     )
+
+
+def test_related_clips_and_inherited_training_do_not_count_as_independent(checker, tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"model": {"name": "rtdetr"}}))
+    (tmp_path / "best_metrics.json").write_text(json.dumps({"metrics": {"coco100": {"mAP": 0.25}}}))
+    (tmp_path / "split.json").write_text(json.dumps({
+        "train_sequences": ["uav1_a"], "seen_training_sequences": ["uav2_a"],
+        "val_sequences": ["uav2_b"],
+    }))
+    with zipfile.ZipFile(tmp_path / "best.pt", "w") as archive:
+        archive.writestr("best/data.pkl", b"test")
+    value = checker.inspect_run(tmp_path)
+    assert not value["sequence_leakage"] and value["flight_family_leakage"]
+    assert not value["validated_result"] and value["mAP"] == 0.25
+
+
+def test_activity_is_current_local_evidence_and_does_not_claim_worker_count(checker, tmp_path):
+    proc, work = tmp_path / "proc", tmp_path / "work"
+    (proc / "123").mkdir(parents=True)
+    (proc / "123/cmdline").write_bytes(f"python\0-u\0-m\0cvlab\0train\0--config\0{work}/config.yaml\0".encode())
+    (proc / "124").mkdir()
+    (proc / "124/cmdline").write_bytes(b"python\0unrelated.py\0")
+    value = checker.activity(work, proc)
+    assert [p["pid"] for p in value["active_processes"]] == [123]
+    assert value["plans"] == [] and "workers" in value["limits"]

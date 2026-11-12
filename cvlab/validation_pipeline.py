@@ -38,11 +38,14 @@ def finish_validation(
     score = scores["coco100"]["mAP"]
     if score is None:
         raise ValueError("Validation has no evaluable target objects")
-    improved = score > payload["best"]
-    payload["best"] = max(payload["best"], score)
+    from .selection_policy import choose_checkpoint
+
+    improved, selection_decision = choose_checkpoint(config, output, scores, payload["best"])
+    payload["best"] = score if improved else payload["best"]
     payload["validation_pending"] = None
     payload["elapsed_seconds"] = elapsed_before + time.perf_counter() - started
-    log.update(metrics=scores, elapsed_seconds=payload["elapsed_seconds"])
+    log.update(metrics=scores, elapsed_seconds=payload["elapsed_seconds"],
+               selection_decision=selection_decision)
     output = Path(output)
     atomic_checkpoint(output / "last.pt", payload)
     if improved:
@@ -62,6 +65,10 @@ def finish_validation(
                 "data_fingerprint": digest(records),
             },
         )
+    from .evaluation_receipts import save_training_evaluation
+
+    save_training_evaluation(config, records, scores, timing,
+                             [output / "last.pt"] + ([output / "best.pt"] if improved else []))
     history = output / "history.jsonl"
     rows = []
     if history.is_file():

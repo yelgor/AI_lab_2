@@ -87,7 +87,10 @@ def recipe(source_config, output, *, epochs, final=False, manifest=None, report=
     for key in ("validation_images", "mode", "selection_report", "selection_report_sha256"):
         config["evaluation"].pop(key, None)
     config["evaluation"].update(independent_video_families=True, per_video_metrics=True)
+    if not final:
+        config["evaluation"]["robust_selection"] = True
     if final:
+        config["evaluation"].pop("robust_selection", None)
         config["data"].update(split="full_train_val", training_manifest=str(manifest))
         config["evaluation"].update(mode="full_data_final_fit", selection_report=str(report),
                                     selection_report_sha256=sha256(report))
@@ -104,6 +107,18 @@ def full_epochs(config, source, count, deadline):
     from .score_improvement import release_gpu
 
     output = Path(config["output"])
+    if (output / "selection_halt.json").is_file():
+        return False
+    existing = rows(output)
+    if (config["evaluation"].get("robust_selection") and existing
+            and not existing[-1].get("selection_decision")):
+        from .selection_policy import assess_metrics
+
+        reference = read_json(output / "initial_validation.json")["metrics"]
+        decision = assess_metrics(reference, existing[-1]["metrics"])
+        if set(decision["reasons"]) & {"class_regression", "family_regression", "small_object_regression"}:
+            write_json(output / "selection_halt.json", decision)
+            return False
     while len(rows(output)) < config["train"]["epochs"]:
         if time.time() >= deadline:
             return False
@@ -131,6 +146,13 @@ def full_epochs(config, source, count, deadline):
             "last_epoch_unique_frames": coverage["unique_frames"],
             "resume_granularity": "full_epoch_boundary; unfinished unsaved epoch may repeat",
         })
+        decision = row.get("selection_decision") or {}
+        if not config["evaluation"].get("mode") and set(decision.get("reasons", [])) & {
+            "class_regression", "family_regression", "small_object_regression",
+        }:
+            write_json(output / "selection_halt.json", decision)
+            print(f"SELECTION HALT: harmful update; source preserved; {decision['reasons']}", flush=True)
+            return False
     return True
 
 
@@ -141,6 +163,8 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     from .prepare import select_records
     from .score_improvement import release_gpu
     from .tiled_inference import TileOptions, export_tiled
+    from .selection_policy import PROTOCOL, assess_metrics, public_rejection, require_training_source
+    from .evaluation_receipts import identity
 
     if (not plan_name.replace("_", "").isalnum()
             or not math.isfinite(hours) or hours <= 0
@@ -151,6 +175,7 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     state_path = root / "state.json"
     source = source_run / "best.pt"
     source_sha = sha256(source)
+    require_training_source(source_sha)
     state = read_json(state_path) if state_path.exists() else {
         "source_sha256": source_sha, "deadline": time.time() + hours * 3600,
         "selection_epochs": selection_epochs, "final_epochs": final_epochs,
@@ -167,26 +192,48 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     selection = (work / "runs/rtdetr_full_train_selection" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_train_selection")
     config = recipe(base, selection, epochs=state["selection_epochs"])
+    config["evaluation"]["cache_directory"] = str(work / "evaluation_cache")
     state["status"] = "full_train_selection"
     write_json(state_path, state)
     print(f"Full-data phase A: train={counts['train']['frames']}, val={counts['val']['frames']}; source={source_sha[:12]}", flush=True)
     if not full_epochs(config, source, counts["train"]["frames"], state["deadline"]):
+        if (selection / "selection_halt.json").is_file():
+            state.update(status="selection_halted", decision=read_json(selection / "selection_halt.json"))
+            write_json(state_path, state)
         return state
     report_path = root / "selection_report.json"
-    if report_path.exists():
+    evaluation = full_config(config, official=True)
+    validation = select_records(evaluation, "val")
+    if report_path.exists() and read_json(report_path).get("selection_protocol") == PROTOCOL:
         report = read_json(report_path)
     else:
-        evaluation = full_config(config, official=True)
-        validation = select_records(evaluation, "val")
+        if report_path.exists():
+            import shutil
+            shutil.copyfile(report_path, report_path.with_name(f"selection_report_legacy_{sha256(report_path)[:12]}.json"))
         candidate = selection / "best.pt"
+        rejection = public_rejection(sha256(candidate))
+        if rejection:
+            state.update(status="selection_rejected", public_rejection=rejection)
+            write_json(state_path, state)
+            return state
         baseline = _score(work, source, evaluation, validation)
         measured = _score(work, candidate, evaluation, validation)
         native_gain = measured["metrics"]["coco100"]["mAP"] - baseline["metrics"]["coco100"]["mAP"]
+        native_decision = assess_metrics(baseline["metrics"], measured["metrics"])
+        if not native_decision["accepted"]:
+            state.update(status="selection_rejected", decision=native_decision)
+            write_json(state_path, state)
+            print(f"REJECTED before tiled inference/final fit: {state['decision']['reasons']}", flush=True)
+            return state
         old_tiled = _score(work, source, evaluation, validation, tiled=True)
         new_tiled = _score(work, candidate, evaluation, validation, tiled=True)
         tiled_gain = new_tiled["metrics"]["coco100"]["mAP"] - old_tiled["metrics"]["coco100"]["mAP"]
-        selected = candidate if native_gain >= 0.001 and tiled_gain >= 0.001 else source
+        tiled_decision = assess_metrics(old_tiled["metrics"], new_tiled["metrics"])
+        selected = candidate if tiled_decision["accepted"] else source
         report = {
+            "selection_protocol": PROTOCOL, "native_decision": native_decision,
+            "tiled_decision": tiled_decision, "accepted": tiled_decision["accepted"],
+            "source_native_identity": identity(source, evaluation, validation),
             "full_heldout_validation": True, "route": "full_train_official_val_selection",
             "frames": len(validation), "data_fingerprint": digest(validation),
             "cap": 100, "image_size": config["model"]["image_size"], "tile_side": 960, "overlap": 0.2,
@@ -202,6 +249,18 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
             "final_budget_reason": "One predeclared complete train+val pass; no tuning on seen validation",
         }
         write_json(report_path, report)
+    if report["source_checkpoint_sha256"] != source_sha:
+        raise ValueError("Selection report belongs to a different source")
+    if (report["data_fingerprint"] != digest(validation)
+            or report.get("source_native_identity") != identity(source, evaluation, validation)):
+        raise ValueError("Selection report data/inference identity changed; preserve it and use a new plan")
+    if sha256(report["selected_checkpoint"]) != report["selected_checkpoint_sha256"]:
+        raise ValueError("Selected checkpoint changed")
+    require_training_source(report["selected_checkpoint_sha256"])
+    if not report.get("accepted"):
+        state.update(status="selection_rejected", decision=report.get("tiled_decision"))
+        write_json(state_path, state)
+        return state
     combined = root / "trainval.json"
     joint = joint_manifest(prepared, combined)
     final_run = (work / "runs/rtdetr_full_data_final" if plan_name == "default"

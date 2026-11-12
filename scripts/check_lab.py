@@ -66,6 +66,14 @@ def inspect_run(path):
     result["sequence_leakage"] = bool(
         set(split.get("train_sequences", ())) & set(split.get("val_sequences", ()))
     )
+    def family(sequence):
+        return sequence.split("_", 1)[0] if sequence.startswith("uav") else sequence
+    seen = set(split.get("train_sequences", ())) | set(split.get("seen_training_sequences", ()))
+    result["flight_family_leakage"] = bool(
+        {family(s) for s in seen} & {family(s) for s in split.get("val_sequences", ())}
+    )
+    if result["flight_family_leakage"]:
+        result.setdefault("errors", []).append("Train/inherited validation flight families overlap")
     if result["sequence_leakage"]:
         result.setdefault("errors", []).append("Train/validation sequences overlap")
     result["validated_result"] &= not result.get("errors", False)
@@ -87,6 +95,9 @@ def inspect_run(path):
     # Presence is evidence only. Never unpickle or load multi-GB predictions.
     result["validation_artifact_present"] = (path / "val_predictions.json").is_file()
     result["checkpoint_phase"] = "not_loaded"
+    result["quality_metrics"] = metrics.get("metrics", {}).get("coco100", {})
+    result["timing"] = metrics.get("timing", {})
+    result["selection_decision"] = metrics.get("selection_decision")
     return result
 
 
@@ -185,10 +196,38 @@ def memory_status():
     return result
 
 
+def activity(work, proc=Path("/proc")):
+    """Read current local evidence, without launching/stopping any process or loading tensors."""
+    work = Path(work).resolve()
+    jobs = []
+    for process in proc.glob("[0-9]*"):
+        try:
+            argv = (process / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            if str(work) in argv and ("-m cvlab " in argv or ".py " in argv):
+                if any(token in argv for token in ("train", "start_", "export_", "evaluate", "predict", "line_search")):
+                    jobs.append({"pid": int(process.name), "argv": argv.strip()})
+        except (OSError, ProcessLookupError):
+            continue
+    plans = []
+    candidates = [work / "efficient_search/state.json", work / "generalization_training/continuation.json"]
+    candidates.extend((work / "full_data").glob("**/state.json"))
+    for path in candidates:
+        if path.is_file():
+            try:
+                state = small_json(path)
+                plans.append({"path": str(path), "mtime": path.stat().st_mtime,
+                              **{k: state[k] for k in ("status", "finished", "source_sha256", "champion_sha256", "submission") if k in state}})
+            except (OSError, ValueError):
+                continue
+    return {"active_processes": jobs, "plans": sorted(plans, key=lambda p: p["mtime"], reverse=True),
+            "limits": "Process argv does not establish completed training or distinguish DataLoader workers. Plan status may be stale."}
+
+
 def audit(work, submission=None, data_root=None):
     work = Path(work)
     prepared = work / "prepared"
     report = {"work": str(work), "memory": memory_status(), "prepared": {}, "runs": []}
+    report["activity"] = activity(work)
     for name in ("train.json", "val.json", "test.json", "folds.json"):
         report["prepared"][name] = (prepared / name).is_file()
     folds_path = prepared / "folds.json"
@@ -208,6 +247,9 @@ def audit(work, submission=None, data_root=None):
             and not r["limited_training"]
         ]
         report["models"][model] = {
+            "measured_runs_including_historical": sum(
+                r["model"] == model and r["mAP"] is not None for r in report["runs"]
+            ),
             "validated_runs": len(measured),
             "measured_folds": sorted(
                 {
@@ -255,6 +297,8 @@ def main(argv=None):
         report["memory"]["gpu_snapshot"],
     )
     print("Prepared files:", report["prepared"])
+    print("Current local processes (workers may share argv):", report["activity"]["active_processes"])
+    print("Recorded plans (may be stale):", report["activity"]["plans"])
     for run in report["runs"]:
         print(
             f"{run['name']}: mAP={run['mAP']}, validated={run['validated_result']}, "

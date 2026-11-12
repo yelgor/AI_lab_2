@@ -19,7 +19,7 @@ from .sequential_policy import (
     video_family,
 )
 
-CONFIRMATION_PROTOCOL = "unseen-flight-families-v2"
+CONFIRMATION_PROTOCOL = "paired-family-class-v3"
 
 
 def probe_config(source, output, lr, probe_images):
@@ -76,85 +76,40 @@ def frozen_rung(trial, rung, row):
 
 def _score(work, checkpoint, config, records, *, tiled=False):
     from dataclasses import asdict
-    from .score_improvement import file_hash, full_validation, release_gpu
+    from .engine import load_trained, predict, setup
+    from .evaluation_receipts import identity, load_receipt, save_receipt
+    from .metrics import evaluate
+    from .score_improvement import release_gpu
+    from .sequential_policy import per_video_scores
     from .tiled_inference import TileOptions, predict_tiled
 
-    sha = file_hash(checkpoint)
     options = TileOptions(960, overlap=0.2, nms_iou=0.6, edge_margin=2, workers=2)
-    identity = {
-        "checkpoint_sha256": sha,
-        "data_fingerprint": digest(records),
-        "model": config["model"],
-        "runtime": config["runtime"],
-        "data": {
-            k: v for k, v in config["data"].items() if k not in ("root", "prepared")
-        },
-        "loader": config["loader"],
-        "max_detections": config["evaluation"]["max_detections"],
-        "options": asdict(options) if tiled else None,
-    }
-    path = work / "efficient_search/cache" / f"{digest(identity)}.json"
-    if path.is_file():
-        result = read_json(path)
-        if result["identity"] != identity:
-            raise ValueError("Confirmation cache identity differs")
-        return result
-    # Reuse the immutable original tiled result only with identical weights/data/options.
-    original = work / "score_improvement/tiling_summary.json"
-    source_config = read_json(work / "runs/rtdetr_fold0_local/config.json")
-    compatible_original = (
-        source_config["model"] == config["model"]
-        and source_config["runtime"]["precision"] == config["runtime"]["precision"]
-        and source_config["runtime"].get("tf32", False)
-        == config["runtime"].get("tf32", False)
-        and source_config["data"].get("ignore_policy")
-        == config["data"].get("ignore_policy")
-    )
-    if tiled and compatible_original and original.is_file():
-        for entry in read_json(original)["models"]:
-            value = entry.get("full_candidate") or {}
-            if (
-                entry.get("checkpoint_sha256") == sha
-                and value.get("checkpoint_sha256") == sha
-                and value.get("data_fingerprint") == digest(records)
-                and value.get("record_ids") == [r["id"] for r in records]
-                and value.get("options") == asdict(options)
-                and entry.get("image_size") == config["model"]["image_size"]
-            ):
-                result = {
-                    "identity": identity,
-                    "metrics": value["metrics"],
-                    "reused": str(original),
-                }
-                write_json(path, result)
-                return result
-    print(
-        f"CONFIRM {'tiled' if tiled else 'native'}: sha={sha[:12]}; images={len(records)}",
-        flush=True,
-    )
-    if not tiled:
-        result = full_validation(
-            config, checkpoint, config["model"]["image_size"], records
-        )
-    else:
-        from .engine import load_trained, setup
-        from .metrics import evaluate
-
-        device = setup(config)
-        model = load_trained(checkpoint, config, device)
+    expected = identity(checkpoint, config, records,
+                        options=asdict(options) if tiled else None)
+    directory = config["evaluation"].get("cache_directory", str(Path(work) / "evaluation_cache"))
+    cached = load_receipt(directory, expected)
+    if cached is not None:
+        print(f"EVALUATION CACHE HIT: {expected['checkpoint_sha256'][:12]}; tiled={tiled}", flush=True)
+        return {**cached, "cache_hit": True}
+    started = time.perf_counter()
+    print(f"CONFIRM {'tiled' if tiled else 'native'}: sha={expected['checkpoint_sha256'][:12]}; images={len(records)}", flush=True)
+    device = setup(config)
+    model = load_trained(checkpoint, config, device)
+    if tiled:
         outputs, timing = predict_tiled(model, config, records, device, options)
-        result = {
-            "metrics": evaluate(
-                records, outputs[0.6], config["evaluation"]["max_detections"]
-            ),
-            "timing": timing,
-        }
-        del model, outputs
-        release_gpu()
-    result["identity"] = identity
-    write_json(path, result)
-    print(f"CONFIRM mAP={result['metrics']['coco100']['mAP']:.6f}", flush=True)
-    return result
+        predictions = outputs[0.6]
+    else:
+        predictions, timing = predict(model, config, records, device)
+    metrics = evaluate(records, predictions, config["evaluation"]["max_detections"])
+    metrics["per_video_mAP"] = per_video_scores(records, predictions)
+    timing = {**timing, "evaluation_wall_seconds": time.perf_counter() - started}
+    result = save_receipt(directory, expected, metrics, timing, origin="full_confirmation")
+    del model, predictions
+    if tiled:
+        del outputs
+    release_gpu()
+    print(f"CONFIRM mAP={metrics['coco100']['mAP']:.6f}; seconds={timing['evaluation_wall_seconds']:.1f}", flush=True)
+    return {**result, "cache_hit": False}
 
 
 def confirm(work, candidate, champion, min_gain, export_tiles):
@@ -162,8 +117,13 @@ def confirm(work, candidate, champion, min_gain, export_tiles):
     from .prepare import select_records
     from .score_improvement import file_hash, release_gpu
     from .tiled_inference import TileOptions, export_tiled
+    from .selection_policy import assess_metrics, public_rejection
 
     candidate, champion = Path(candidate), Path(champion)
+    rejected = public_rejection(file_hash(candidate / "best.pt"))
+    if rejected:
+        return {"accepted": False, "confirmation_protocol": CONFIRMATION_PROTOCOL,
+                "public_rejection": rejected}
     config = full_config(read_json(candidate / "config.json"))
     original = read_json(work / "runs/rtdetr_fold0_local/config.json")
     # A clip-disjoint historical fold can still contain related flight excerpts.
@@ -194,7 +154,8 @@ def confirm(work, candidate, champion, min_gain, export_tiles):
             and old["metrics"]["coco100"].get("per_class", {}).get(name) is not None
         },
     }
-    if native_gain < min_gain:
+    result["native_decision"] = assess_metrics(old["metrics"], new["metrics"], min_gain=min_gain)
+    if not result["native_decision"]["accepted"]:
         return result
     official = full_config(config, official=True)
     records = select_records(official, "val")
@@ -203,7 +164,8 @@ def confirm(work, candidate, champion, min_gain, export_tiles):
     old = _score(work, champion / "best.pt", official, records, tiled=True)
     new = _score(work, candidate / "best.pt", official, records, tiled=True)
     tiled_gain = new["metrics"]["coco100"]["mAP"] - old["metrics"]["coco100"]["mAP"]
-    result.update(tiled_gain=tiled_gain, accepted=tiled_gain >= min_gain)
+    result["tiled_decision"] = assess_metrics(old["metrics"], new["metrics"], min_gain=min_gain)
+    result.update(tiled_gain=tiled_gain, accepted=result["tiled_decision"]["accepted"])
     result["tiled_per_class_gain"] = {
         name: value - old["metrics"]["coco100"].get("per_class", {}).get(name, value)
         for name, value in new["metrics"]["coco100"].get("per_class", {}).items()
@@ -243,6 +205,7 @@ def observe(trial, rung):
     row = next(row for row in rows if row["epoch"] == rung)
     initial = read_json(trial / "initial_validation.json")
     base = initial["metrics"]
+    from .selection_policy import assess_metrics
     destination = frozen_rung(trial, rung, row)
     cumulative = sum(r["train_batches"] for r in rows if r["epoch"] <= rung)
     prior_elapsed = (
@@ -261,6 +224,8 @@ def observe(trial, rung):
         "global_gain": row["metrics"]["coco100"]["mAP"] - base["coco100"]["mAP"],
         "probe_mAP": row["metrics"]["coco100"]["mAP"],
         "per_video_mAP": row["metrics"]["per_video_mAP"],
+        "metrics": row["metrics"],
+        "probe_decision": assess_metrics(base, row["metrics"]),
         "evidence": paired_evidence(
             base["per_video_mAP"], row["metrics"]["per_video_mAP"]
         ),
@@ -270,6 +235,9 @@ def observe(trial, rung):
 def rebase_observations(observations, champion_metrics):
     """After promotion, allocate against the new champion rather than an obsolete source."""
     for observation in observations:
+        from .selection_policy import assess_metrics
+
+        observation["probe_decision"] = assess_metrics(champion_metrics, observation.get("metrics", {}))
         observation.setdefault(
             "source_evidence", copy.deepcopy(observation["evidence"])
         )
@@ -410,6 +378,9 @@ def run(
                 write_json(state_path, state)
             if file_hash(Path(cycle["source"]) / "best.pt") != cycle["source_sha256"]:
                 raise ValueError("Source checkpoint changed")
+            from .selection_policy import require_training_source
+
+            require_training_source(cycle["source_sha256"])
             probe = cycle["trials"][0]["config"]
             training = select_records(probe, "train")
             records = validation_records(probe, training)
@@ -429,6 +400,14 @@ def run(
                         None,
                     )
                     if previous:
+                        from .selection_policy import assess_metrics
+
+                        if "metrics" not in previous:
+                            previous["metrics"] = read_json(Path(previous["run"]) / "best_metrics.json")["metrics"]
+                        reference = read_json(Path(previous["trial"]) / "initial_validation.json")["metrics"]
+                        if state["champion"] != cycle["source"]:
+                            reference = read_json(Path(state["champion"]) / "best_metrics.json")["metrics"]
+                        previous["probe_decision"] = assess_metrics(reference, previous["metrics"])
                         current.append(previous)
                         continue
                     if (

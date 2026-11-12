@@ -23,6 +23,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--log", type=Path, help="Actual active job log; otherwise use the newest local log")
+    parser.add_argument("--state", type=Path, help="Actual active plan state; otherwise use the newest plan")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     lock = (args.output / "watchdog.lock").open("a")
@@ -41,7 +43,7 @@ def main():
     for proc in Path("/proc").glob("[0-9]*"):
         try:
             argv = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-            if "-m cvlab train-" in argv or "scripts/start_" in argv and "--work" in argv:
+            if str(args.work) in argv and any(token in argv for token in ("-m cvlab train", "scripts/start_", "scripts/export_", "scripts/line_search_")):
                 processes.append({"pid": int(proc.name), "argv": argv, "io": (proc / "io").read_text()})
         except (OSError, ProcessLookupError):
             pass
@@ -57,7 +59,8 @@ def main():
     disk = shutil.disk_usage(args.work if args.work.exists() else args.output)
     if disk.free < 10 * 1024**3:
         alerts.append("Work disk has less than 10 GiB free")
-    log = args.work / "logs/efficient_search.log"
+    logs = list((args.work / "logs").glob("*.log"))
+    log = args.log or (max(logs, key=lambda p: p.stat().st_mtime) if logs else args.work / "logs/efficient_search.log")
     tail = ""
     age = None
     if log.exists():
@@ -73,7 +76,10 @@ def main():
         alerts.append("Training exited; inspect final log (exit code unavailable for pre-existing process)")
     state = {}
     try:
-        state = json.loads((args.work / "efficient_search/state.json").read_text())
+        paths = [p for p in [args.work / "efficient_search/state.json",
+                             *list((args.work / "full_data").glob("**/state.json"))] if p.is_file()]
+        state_path = args.state or (max(paths, key=lambda p: p.stat().st_mtime) if paths else args.work / "efficient_search/state.json")
+        state = json.loads(state_path.read_text())
     except (OSError, ValueError) as exc:
         alerts.append("Cannot read search state: " + str(exc))
     observations = []
@@ -88,7 +94,7 @@ def main():
             writer.writeheader()
             writer.writerows(observations)
     submissions = [{"path": str(p), "bytes": p.stat().st_size} for p in sorted((args.work / "submissions").glob("*.csv"))]
-    status = {"time": now, "processes": processes, "gpu": gpu, "memory_kib": {k: mem[k] for k in ("MemAvailable", "SwapTotal", "SwapFree")}, "mount": mount, "disk_free_bytes": disk.free, "log_age_seconds": age, "log_tail": tail, "champion": state.get("champion"), "observations": observations, "confirmations": confirmations, "submissions": submissions, "alerts": alerts}
+    status = {"time": now, "processes": processes, "gpu": gpu, "memory_kib": {k: mem[k] for k in ("MemAvailable", "SwapTotal", "SwapFree")}, "mount": mount, "disk_free_bytes": disk.free, "log": str(log), "plan_status": state.get("status"), "log_age_seconds": age, "log_tail": tail, "champion": state.get("champion"), "observations": observations, "confirmations": confirmations, "submissions": submissions, "alerts": alerts}
     temporary = previous_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(status, indent=2))
     temporary.replace(previous_path)

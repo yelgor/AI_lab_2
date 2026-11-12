@@ -9,6 +9,9 @@
 4. [Оновлений протокол повних даних і ціль 0.28+](docs/full_data_protocol.md).
 5. Для локального виконання — [watchdog](docs/local_watchdog.md) та
    [протокол ефективного пошуку](experiments/efficient_search.md).
+6. [Посилений відбір та кеш оцінок](docs/selection_policy.md) і
+   [аудит вимог лабораторної](docs/LAB_PROGRESS.md). Нові запуски не можуть
+   використовувати застарілий AP-only gate як дозвіл на promotion/export.
 
 ## Режим спільної роботи
 

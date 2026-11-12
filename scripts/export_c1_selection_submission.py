@@ -3,7 +3,6 @@
 import argparse
 import fcntl
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -11,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cvlab.common import read_json, write_json
 from cvlab.full_data import sha256
+from cvlab.selection_policy import PROTOCOL, require_training_source
 
 
 def main():
@@ -31,6 +31,12 @@ def main():
         report = read_json(report_path)
         candidate = run / "best.pt"
         candidate_sha = sha256(candidate)
+        require_training_source(candidate_sha)
+        if (report.get("selection_protocol") != PROTOCOL or not report.get("accepted")
+                or not report.get("native_decision", {}).get("accepted")
+                or not report.get("tiled_decision", {}).get("accepted")
+                or report.get("source_checkpoint_sha256") != sha256(source / "best.pt")):
+            raise RuntimeError("A source-bound robust confirmation is required; legacy AP-only gates cannot export")
         if (report.get("candidate_checkpoint_sha256") != candidate_sha
                 or report.get("selected_checkpoint_sha256") != candidate_sha
                 or report.get("native_gain", -1) < 0.001
@@ -46,8 +52,11 @@ def main():
         from cvlab.engine import load_trained, setup
         from cvlab.prepare import select_records
         from cvlab.tiled_inference import TileOptions, export_tiled
+        from cvlab.common import digest
         import torch
 
+        if digest(select_records(config, "val")) != report["data_fingerprint"]:
+            raise RuntimeError("Validation records differ from confirmation; no export")
         records = select_records(config, "test")
         device = setup(config)
         model = load_trained(candidate, config, device)
