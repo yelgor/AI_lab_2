@@ -386,3 +386,24 @@ gains проходять gate. Команда наведена в `experiments/c
 Фактичний результат alpha `.5` додати після завершення; не позначати CSV як
 SUBMITTED/SCORED без відповіді Kaggle. Runner не підміняє family-grouped OOF, а
 цей крок є контрольованим тестом гіпотези про часткове повернення до public-best.
+
+### Web review of local commit e6fbd76 — 2026-11-12
+
+Reviewed the full-data continuation and direction search; 69 targeted CPU tests
+passed in an isolated checkout. Detailed findings and ordered actions:
+[training efficiency review](reviews/2026-11-12-training-efficiency.md).
+
+The confirmed inefficiency is selection: 48,402 presentations improved official
+native/tiled AP while the recorded public result fell from 0.2021478454 to
+approximately 0.1919. Truck+bus explain about 98% of pooled native AP gain, with
+all validation bus boxes in one family. Exact Kaggle/local metric parity remains
+unverified; do not infer it from the custom metric template name.
+
+Keep c1d7fcc83dde as the user's approved training source and retain the final-fit
+STOP barrier. Before another long run: bind promotion to approved source/outcome,
+verify interpolation baseline identities, reuse exact evaluation receipts, and
+align monitoring/power protection with the actual active plan. Preserve a healthy
+current job. This review changes no laptop process and triggers no GPU launch or
+automatic submission. Local agent: report the active plan/source SHA, completed
+phase timings/cache hits, and which review items were applied before the next
+training launch.
