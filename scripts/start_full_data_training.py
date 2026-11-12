@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--selection-epochs", type=int, default=2)
     parser.add_argument("--final-epochs", type=int, default=1)
     parser.add_argument("--plan-name", default="default")
+    parser.add_argument("--batch-size", type=int, default=1, help="Measured physical batch; keeps effective batch and requires a new plan when changed")
     args = parser.parse_args()
     work = args.work.resolve()
     with (work / ".full_data.launcher.lock").open("a") as own:
@@ -36,7 +37,7 @@ def main():
 
             run(work, args.source, hours=args.hours,
                 selection_epochs=args.selection_epochs, final_epochs=args.final_epochs,
-                plan_name=args.plan_name)
+                plan_name=args.plan_name, batch_size=args.batch_size)
 
 
 if __name__ == "__main__":

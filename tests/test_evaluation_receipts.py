@@ -10,6 +10,7 @@ from test_pipeline import competition  # noqa: F401
 
 def test_training_receipt_avoids_confirmation_gpu_forward(tmp_path, monkeypatch):
     config = load_config(Path(__file__).parents[1] / "configs/rtdetr.yaml")
+    config["loader"]["batch_size"] = 1
     config["evaluation"]["cache_directory"] = str(tmp_path / "cache")
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"immutable test weights")
@@ -27,6 +28,11 @@ def test_training_receipt_avoids_confirmation_gpu_forward(tmp_path, monkeypatch)
     # Scheduling and source split do not change deterministic inference on these exact records.
     result = efficient_search._score(tmp_path, checkpoint, adjusted, records)
     assert result["cache_hit"] and result["metrics"] == metrics
+    larger_batch = copy.deepcopy(adjusted)
+    larger_batch["loader"]["batch_size"] = 2
+    assert load_receipt(tmp_path / "cache", identity(checkpoint, larger_batch, records)) is None
+    larger_batch["evaluation"]["validation_batch_size"] = 1
+    assert load_receipt(tmp_path / "cache", identity(checkpoint, larger_batch, records)) is not None
     for section, key, value in [
         ("model", "image_size", 1280),
         ("runtime", "precision", "fp32"),

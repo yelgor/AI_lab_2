@@ -6,6 +6,9 @@
 
 ## Реалізовано
 
+Оптимізація циклу навчання та коротке A/B-вимірювання GPU: [training performance](docs/training_performance.md).
+Більший фізичний batch застосовується в новому плані після вимірювання швидкості й перевірки якості.
+
 - Читання competition layout: `train|val/images/<clip>/*.jpg`, `labels/`, `ignore/`, `test_images.csv`.
 - Перевірка labels, розмірів, класів і тестових ID; EDA та картинки ground truth.
 - Три відтворювані folds за цілими clips; офіційний `val` можна зберегти для окремої перевірки.

@@ -118,6 +118,32 @@ def test_recorded_public_regression_is_rejected_before_training(tmp_path, monkey
         full_data.run(tmp_path, tmp_path / "rejected_source")
 
 
+def test_measured_physical_batch_keeps_full_data_update_size(tiny_run, tmp_path):  # noqa: F811
+    config = recipe(tiny_run, tmp_path / "batch2", epochs=1, batch_size=2)
+    assert config["loader"]["batch_size"] == 2
+    assert config["train"]["accumulation"] == 1
+    assert config["evaluation"]["validation_batch_size"] == 1
+    assert tiny_run["train"]["accumulation"] == 2  # Source config stays immutable.
+    with pytest.raises(ValueError, match="divide"):
+        recipe(tiny_run, tmp_path / "batch3", epochs=1, batch_size=3)
+
+
+def test_full_epoch_coverage_counts_frames_instead_of_physical_batches(tmp_path, monkeypatch):
+    import time
+    from cvlab import engine, full_data
+
+    output = tmp_path / "run"
+    config = {"output": str(output), "loader": {"batch_size": 2}, "evaluation": {},
+              "data": {"split": "official"}, "train": {"epochs": 1}}
+    def train(*args, **kwargs):
+        write_json(output / "coverage_epoch_0000.json", {"unique_frames": 5, "presentations": 5})
+        (output / "history.jsonl").write_text(json.dumps({"epoch": 0, "train_batches": 3}) + "\n")
+    monkeypatch.setattr(engine, "train", train)
+    assert full_data.full_epochs(config, tmp_path / "source.pt", 5, time.time() + 60)
+    summary = read_json(output / "coverage_summary.json")
+    assert summary["actual_samples"] == 5 and summary["completed_full_epochs"] == 1
+
+
 def test_harmful_update_stops_before_another_full_epoch(tmp_path, monkeypatch):
     from cvlab import engine, full_data
     import time

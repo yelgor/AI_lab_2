@@ -71,7 +71,7 @@ def joint_manifest(prepared, destination):
     return {"frames": count, "source_counts": counts, "sha256": actual_sha}
 
 
-def recipe(source_config, output, *, epochs, final=False, manifest=None, report=None):
+def recipe(source_config, output, *, epochs, final=False, manifest=None, report=None, batch_size=1):
     config = copy.deepcopy(source_config)
     config["output"] = str(output)
     config["data"].update(split="official", frame_step=1)
@@ -87,6 +87,14 @@ def recipe(source_config, output, *, epochs, final=False, manifest=None, report=
     for key in ("validation_images", "mode", "selection_report", "selection_report_sha256"):
         config["evaluation"].pop(key, None)
     config["evaluation"].update(independent_video_families=True, per_video_metrics=True)
+    # Preserve the effective batch of the established batch-one full-data recipe.
+    effective_batch = source_config["train"]["accumulation"]
+    if type(batch_size) is not int or batch_size < 1 or effective_batch % batch_size:
+        raise ValueError("Physical batch must divide the full-data recipe's effective batch")
+    config["loader"]["batch_size"] = batch_size
+    config["train"]["accumulation"] = effective_batch // batch_size
+    if batch_size != 1:
+        config["evaluation"]["validation_batch_size"] = 1
     if not final:
         config["evaluation"]["robust_selection"] = True
     if final:
@@ -138,11 +146,16 @@ def full_epochs(config, source, count, deadline):
             raise RuntimeError("Full-data epoch made no committed progress")
         row = after[-1]
         coverage = read_json(output / f"coverage_epoch_{row['epoch']:04d}.json")
-        if row["train_batches"] != count or coverage["unique_frames"] != count:
+        expected_batches = math.ceil(count / config.get("loader", {}).get("batch_size", 1))
+        if (row["train_batches"] != expected_batches or coverage["unique_frames"] != count
+                or coverage.get("presentations", coverage["unique_frames"]) != count):
             raise RuntimeError("Epoch was not a complete unique-frame pass; preserve and inspect")
         write_json(output / "coverage_summary.json", {
             "dataset_size": count, "completed_full_epochs": len(after),
-            "actual_samples": sum(r["train_batches"] for r in after),
+            "actual_samples": sum(
+                read_json(output / f"coverage_epoch_{r['epoch']:04d}.json")["unique_frames"]
+                for r in after
+            ),
             "last_epoch_unique_frames": coverage["unique_frames"],
             "resume_granularity": "full_epoch_boundary; unfinished unsaved epoch may repeat",
         })
@@ -157,7 +170,7 @@ def full_epochs(config, source, count, deadline):
 
 
 def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
-        plan_name="default"):
+        plan_name="default", batch_size=1):
     from .efficient_search import _score, full_config
     from .engine import load_trained, setup
     from .prepare import select_records
@@ -179,10 +192,13 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     state = read_json(state_path) if state_path.exists() else {
         "source_sha256": source_sha, "deadline": time.time() + hours * 3600,
         "selection_epochs": selection_epochs, "final_epochs": final_epochs,
+        "batch_size": batch_size,
         "target_public_score": 0.28,
     }
     if state["source_sha256"] != source_sha:
         raise ValueError("Full-data source changed")
+    if state.get("batch_size", 1) != batch_size:
+        raise ValueError("Physical batch changed; use a new plan, preserving the existing run")
     if state.get("finished"):
         return state
     base = read_json(source_run / "config.json")
@@ -191,7 +207,7 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     state["data"] = counts
     selection = (work / "runs/rtdetr_full_train_selection" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_train_selection")
-    config = recipe(base, selection, epochs=state["selection_epochs"])
+    config = recipe(base, selection, epochs=state["selection_epochs"], batch_size=batch_size)
     config["evaluation"]["cache_directory"] = str(work / "evaluation_cache")
     state["status"] = "full_train_selection"
     write_json(state_path, state)
@@ -266,7 +282,7 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     final_run = (work / "runs/rtdetr_full_data_final" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_final")
     final_config = recipe(base, final_run, epochs=state["final_epochs"], final=True,
-                          manifest=combined, report=report_path)
+                          manifest=combined, report=report_path, batch_size=batch_size)
     state.update(status="full_data_final_fit", joint_manifest=joint,
                  selection_report_sha256=sha256(report_path))
     write_json(state_path, state)

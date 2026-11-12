@@ -452,3 +452,41 @@ one-flight/class regressions, identity-separated interpolation, source rejection
 restart halt, inherited leakage and watchdog ownership. No live laptop training
 or GPU execution was performed by the web session. Mid-epoch sampler recovery
 and hard full-epoch deadlines remain unimplemented.
+
+### Training loop optimization — web Codex, 2026-11-12
+
+The user asked whether training itself is becoming more efficient. The earlier
+commit optimized selection and duplicate evaluation; this change additionally
+replaces the per-minibatch loss readback path with a shared on-device detached
+loss accumulator. Finiteness is checked before each optimizer update; clipping,
+AMP, accumulation normalization and learned optimizer state are preserved.
+The per-batch reference remains available for measurement. Training history and
+pending validation now carry pipeline frames/s, host loader wait, update-boundary
+and loss-readback counts, with explicit timing scope. No actual GPU speedup or
+new AP is claimed from this CPU-only web environment.
+
+See [training performance](training_performance.md). The source-preserving
+`scripts/benchmark_training.py` compares reference/optimized readback and physical
+batch sizes using the actual shared training loop. It holds the GPU lease,
+checks RAM/other compute, bounds CUDA allocation, stress-tests dense GT, restores
+source state per case, alternates order and reports measured throughput only.
+It saves no trained model and submits nothing. The full-data launcher can apply
+a measured `--batch-size 2` under a new plan, preserving the established effective
+batch via accumulation. Validation stays batch one; cache identities include
+the actual inference batch; full-epoch checks count frames correctly.
+
+Local agent: keep the healthy owner until a safe saved boundary; pull this code
+then run the documented short benchmark from immutable c1 when the GPU is free.
+If the measured gain/VRAM headroom is absent, keep batch one. A physical-batch
+change can alter RT-DETR loss normalization/denoising despite equal effective
+batch, so it still needs the robust held-out gates in a new c1-initialized plan.
+Record the benchmark summary, actual training frames/s and held-out class/family
+deltas next. Do not overwrite source config/weights, clear a rejected plan's
+halt/STOP, infer public gain, or start a second concurrent training model.
+
+Validation for this change: final full suite 317 passed, 1 CUDA equivalence test
+skipped because no GPU is attached to the web executor. CPU tests verify exact
+reference/optimized parameter and AdamW-state equality, nonfinite-loss rejection
+before updates, accumulation tails, source-preserving real benchmark execution,
+physical-batch coverage and validation-batch/cache identities. Actual GPU frames/s
+and AP improvement remain unmeasured. Local benchmark results must supply them.

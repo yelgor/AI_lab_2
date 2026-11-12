@@ -112,6 +112,11 @@ def move(images, targets, device):
 @torch.inference_mode()
 def predict(model, config, records, device, worker_context=None):
     model.eval()
+    validation_batch = config["evaluation"].get("validation_batch_size")
+    if validation_batch is not None:
+        if type(validation_batch) is not int or validation_batch < 1:
+            raise ValueError("validation_batch_size must be a positive integer")
+        config = {**config, "loader": {**config["loader"], "batch_size": validation_batch}}
     loader = make_loader(config, records, False, worker_context=worker_context)
     warmup = config["evaluation"].get("warmup_batches", 2)
     if warmup:
@@ -406,18 +411,10 @@ def train(
     if init_checkpoint:
         model.load_state_dict(checkpoint["model"])
         checkpoint = None
-    backbone, heads = [], []
-    for name, parameter in model.named_parameters():
-        if parameter.requires_grad:
-            (backbone if "backbone" in name else heads).append(parameter)
+    from .training_runtime import make_optimizer, train_batches
+
     tc = config["train"]
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": backbone, "lr": tc["lr"] * tc["backbone_lr_factor"]},
-            {"params": heads, "lr": tc["lr"]},
-        ],
-        weight_decay=tc["weight_decay"],
-    )
+    optimizer = make_optimizer(model, tc)
     if warm_state is not None:
         optimizer.load_state_dict(warm_state["optimizer"])
         for group, lr in zip(
@@ -621,63 +618,28 @@ def train(
             if validation_pipeline is not None:
                 validation_pipeline.memory_gate()
             training_mode(model, tc)
-            optimizer.zero_grad(set_to_none=True)
             batches = min(
-                len(loader),
-                round_batches or tc.get("max_batches_per_epoch") or len(loader),
+                len(loader), round_batches or tc.get("max_batches_per_epoch") or len(loader)
             )
-            total_loss, observed, stop = 0.0, 0, False
             print(f"epoch={epoch} training; up to {batches} batches", flush=True)
-            for index, (images, targets, metadata) in enumerate(loader):
-                if index >= batches:
-                    break
-                images, targets = move(images, targets, device)
-                group_start = (index // accumulation) * accumulation
-                group_size = min(accumulation, batches - group_start)
-                with amp_context(config, device):
-                    losses = model.loss(images, targets)
-                    loss = sum(losses.values())
-                if not torch.isfinite(loss):
-                    raise RuntimeError(
-                        f"Non-finite loss at epoch={epoch}, batch={index}: {losses}"
-                    )
-                scaler.scale(loss / group_size).backward()
-                total_loss += loss.item()
-                observed += 1
+
+            def on_sample(metadata):
                 coverage.update(metadata)
-                seen_sequences.update(
-                    meta["record"]["sequence_id"] for meta in metadata
-                )
-                if observed % 250 == 0:
-                    print(
-                        f"epoch={epoch} batch={observed}/{batches} mean_loss={total_loss / observed:.4f}",
-                        flush=True,
-                    )
-                boundary = (index + 1) % accumulation == 0 or index + 1 == batches
-                if boundary:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), tc["clip_grad"])
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad(set_to_none=True)
-                    # Read only committed metrics; with overlap a previous epoch
-                    # can finish while the next one is already using the GPU.
-                    if observed % 250 == 0 or index + 1 == batches:
-                        if early_stopping_reached(config, output):
-                            print(
-                                "EARLY STOP: committing current progress; best weights preserved",
-                                flush=True,
-                            )
-                            stop = True
-                            break
-                    if elapsed_before + time.perf_counter() - started >= tc[
-                        "max_hours"
-                    ] * 3600 or (
-                        round_seconds is not None
-                        and time.perf_counter() - started >= round_seconds
-                    ):
-                        stop = True
-                        break
+                seen_sequences.update(meta["record"]["sequence_id"] for meta in metadata)
+
+            def on_update(observed, planned):
+                if observed % 250 == 0 or observed == planned:
+                    if early_stopping_reached(config, output):
+                        print("EARLY STOP: committing current progress; best weights preserved", flush=True)
+                        return True
+                return (elapsed_before + time.perf_counter() - started >= tc["max_hours"] * 3600
+                        or (round_seconds is not None and time.perf_counter() - started >= round_seconds))
+
+            progress = train_batches(model, loader, optimizer, scaler, config, device, batches,
+                                     on_sample=on_sample, on_update=on_update, prefix=f"epoch={epoch} ")
+            total_loss, observed, stop = (progress[key] for key in ("loss_sum", "observed", "stop"))
+            train_timing = progress["train_timing"]
+            print(f"epoch={epoch} training pipeline: {train_timing['images_per_second']:.2f} images/s; loader host wait={train_timing['loader_wait_seconds']:.1f}s", flush=True)
             if not observed:
                 break
             if validation_pipeline is not None:
@@ -691,8 +653,11 @@ def train(
                 "observed": observed,
                 "batches": batches,
                 "stop": stop,
+                "train_timing": train_timing,
             }
+            checkpoint_started = time.perf_counter()
             atomic_checkpoint(output / "last.pt", snapshot(epoch, pending_validation))
+            train_timing["pre_validation_checkpoint_seconds"] = time.perf_counter() - checkpoint_started
             print(
                 f"epoch={epoch} training complete; checkpoint saved; running validation",
                 flush=True,
@@ -703,6 +668,7 @@ def train(
                 pending_validation[key]
                 for key in ("loss_sum", "observed", "batches", "stop")
             )
+            train_timing = pending_validation.get("train_timing", {"status": "not_measured_legacy_checkpoint"})
             if saved_coverage:
                 write_json(output / f"coverage_epoch_{epoch:04d}.json", saved_coverage)
             print(
@@ -714,6 +680,7 @@ def train(
             log = {
                 "epoch": epoch, "train_loss": total_loss / observed,
                 "train_batches": observed, "train_batches_planned": batches,
+                "train_timing": train_timing,
                 "epoch_complete": observed == batches,
                 "elapsed_seconds": elapsed_before + time.perf_counter() - started,
                 "dataset_size": len(training),
@@ -752,6 +719,7 @@ def train(
                 "train_loss": total_loss / observed,
                 "train_batches": observed,
                 "train_batches_planned": batches,
+                "train_timing": train_timing,
                 "epoch_complete": observed == batches,
                 "timing": timing,
                 "lr": [group["lr"] for group in optimizer.param_groups],
@@ -790,6 +758,7 @@ def train(
             "train_loss": total_loss / observed,
             "train_batches": observed,
             "train_batches_planned": batches,
+                "train_timing": train_timing,
             "epoch_complete": observed == batches,
             "elapsed_seconds": elapsed,
             "metrics": scores,

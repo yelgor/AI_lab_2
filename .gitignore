@@ -14,3 +14,4 @@ access_token
 *.cvlab-part
 
 local_supervision/
+benchmarks/

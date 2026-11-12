@@ -12,6 +12,8 @@
 6. [Посилений відбір та кеш оцінок](docs/selection_policy.md) і
    [аудит вимог лабораторної](docs/LAB_PROGRESS.md). Нові запуски не можуть
    використовувати застарілий AP-only gate як дозвіл на promotion/export.
+7. Для оптимізації самого циклу — [вимірювання training throughput](docs/training_performance.md).
+   Не називати зменшення loss-readback або CPU-тест виміряним GPU speedup/AP gain.
 
 ## Режим спільної роботи
 

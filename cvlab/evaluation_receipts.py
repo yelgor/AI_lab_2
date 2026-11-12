@@ -28,6 +28,7 @@ def identity(checkpoint, config, records, *, options=None):
         "seed": config["seed"],
         "ignore_policy": config["data"].get("ignore_policy"),
         "max_detections": config["evaluation"]["max_detections"],
+        "batch_size": 1 if options is not None else config["evaluation"].get("validation_batch_size", config["loader"]["batch_size"]),
         "options": options,
         "implementation": digest(
             [
