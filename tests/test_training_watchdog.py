@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -170,12 +171,16 @@ def fake_process(proc, pid, ppid, argv, cwd):
     (folder / "cwd").symlink_to(cwd)
 
 
-def test_process_matching_collapses_workers_and_ignores_wrappers_and_strings(tmp_path):
+@pytest.mark.parametrize("sampling_script", [False, True])
+def test_process_matching_collapses_workers_and_ignores_wrappers_and_strings(tmp_path, sampling_script):
     proc, project = tmp_path / "proc", tmp_path / "project"
     proc.mkdir()
     project.mkdir()
     work = tmp_path / "work"
     argv = ["python", "-u", "-m", "cvlab", "train-efficient", "--work", str(work)]
+    if sampling_script:
+        argv = ["python", "-u", str(project / "scripts/start_sampling_experiment.py"),
+                "--work", str(work)]
     fake_process(proc, 101, 1, argv, project)
     fake_process(proc, 102, 101, argv, project)
     fake_process(proc, 103, 101, argv, project)
@@ -193,6 +198,14 @@ def test_process_matching_collapses_workers_and_ignores_wrappers_and_strings(tmp
     roots, ticks, io = wd.cvlab_processes(project, work, proc)
     assert [p["pid"] for p in roots] == [101]
     assert ticks == 60 and io == 900
+
+
+def test_external_confirmed_csv_is_visible_to_watchdog(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"cycles": [], "external_promotions": [
+        {"accepted": True, "submission": "/work/submissions/confirmed.csv"}
+    ]}))
+    assert wd.controller_summary(path)["submissions"] == ["/work/submissions/confirmed.csv"]
 
 
 def test_missing_mount_does_not_create_fake_work_tree(config, sample, monkeypatch):

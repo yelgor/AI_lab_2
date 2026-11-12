@@ -188,8 +188,17 @@ def make_loader(config, records, training, generator=None, worker_context=None):
         options["prefetch_factor"] = cfg["prefetch_factor"]
         # Keep false by default: recreating workers gives reproducible epoch-boundary resume.
         options["persistent_workers"] = cfg.get("persistent_workers", False)
+    sampling = cfg.get("sampling", "shuffle")
+    if sampling not in ("shuffle", "flight_time"):
+        raise ValueError("loader.sampling must be shuffle or flight_time")
+    sampler = None
+    if training and sampling == "flight_time":
+        from .sampling import FlightTimeSampler
+
+        sampler = FlightTimeSampler(records, generator, cfg.get("temporal_bins", 8))
     return DataLoader(
-        data, batch_size=cfg["batch_size"], shuffle=training, drop_last=False, **options
+        data, batch_size=cfg["batch_size"], shuffle=training and sampler is None,
+        sampler=sampler, drop_last=False, **options
     )
 
 

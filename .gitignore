@@ -13,3 +13,4 @@ access_token
 .env
 *.cvlab-part
 
+local_supervision/

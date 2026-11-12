@@ -75,22 +75,28 @@ def inspect_frame(args):
 
 
 def group_folds(records, folds, seed):
+    from .sequential_policy import video_family
+
     groups = defaultdict(list)
+    sequences = defaultdict(set)
     for record in records:
-        groups[record["sequence_id"]].append(record["id"])
+        family = video_family(record["sequence_id"])
+        groups[family].append(record["id"])
+        sequences[family].add(record["sequence_id"])
     if not 2 <= folds <= len(groups):
-        raise ValueError("Need 2 <= folds <= number of training sequences")
+        raise ValueError("Need 2 <= folds <= number of independent flight families")
     keys = sorted(groups)
     random.Random(seed).shuffle(keys)
-    # Greedy frame-count balancing, with seeded tie ordering; never split a clip.
+    # Never split related excerpts of a flight between training and validation.
     keys.sort(key=lambda key: len(groups[key]), reverse=True)
     bins, loads = [[] for _ in range(folds)], [0] * folds
     for key in keys:
         selected = min(range(folds), key=lambda i: loads[i])
-        bins[selected].append(key)
+        bins[selected].extend(sorted(sequences[key]))
         loads[selected] += len(groups[key])
     return {
         "seed": seed,
+        "grouping": "flight_family_v1",
         "folds": [{"fold": i, "val_sequences": b} for i, b in enumerate(bins)],
     }
 
@@ -108,11 +114,13 @@ def prepare(root, output, workers=8, folds=3, seed=42):
         for i, record in enumerate(records, 1):
             record["id"] = i
         manifests[split] = {"version": 1, "classes": CLASSES, "images": records}
-    train_clips = {r["clip"] for r in manifests["train"]["images"]}
-    val_clips = {r["clip"] for r in manifests["val"]["images"]}
+    from .sequential_policy import video_family
+
+    train_clips = {video_family(r["sequence_id"]) for r in manifests["train"]["images"]}
+    val_clips = {video_family(r["sequence_id"]) for r in manifests["val"]["images"]}
     if train_clips & val_clips:
         raise ValueError(
-            "Official train/val share clip names. Confirm grouping before proceeding."
+            "Official train/val share flight families. Confirm grouping before proceeding."
         )
     for split, manifest in manifests.items():
         write_json(output / f"{split}.json", manifest)
@@ -232,9 +240,14 @@ def select_records(config, split):
     mode = config["data"]["split"]
     if mode == "official":
         records = read_json(prepared / f"{split}.json")["images"]
+    elif mode == "full_train_val":
+        if split != "train":
+            raise ValueError("Final train+val fit has no independent validation")
+        records = read_json(config["data"]["training_manifest"])["images"]
     elif mode == "fold":
         records = read_json(prepared / "train.json")["images"]
-        fold = read_json(prepared / "folds.json")["folds"][config["data"]["fold"]]
+        folds_file = prepared / config["data"].get("folds_file", "folds.json")
+        fold = read_json(folds_file)["folds"][config["data"]["fold"]]
         validation = set(fold["val_sequences"])
         records = [
             r for r in records if (r["sequence_id"] in validation) == (split == "val")

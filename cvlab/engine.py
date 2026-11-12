@@ -260,6 +260,20 @@ def train(
     initial_validation_cache=None,
     round_seconds=None,
 ):
+    final_fit = config["evaluation"].get("mode") == "full_data_final_fit"
+    if final_fit:
+        if not (resume or init_checkpoint):
+            raise ValueError("Final fit requires learned initialization or its own checkpoint")
+        if validation_pipeline is not None or initial_validation_cache is not None:
+            raise ValueError("Final fit cannot use a validation pipeline/cache")
+        report = Path(config["evaluation"]["selection_report"])
+        with report.open("rb") as stream:
+            report_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        if report_sha != config["evaluation"]["selection_report_sha256"]:
+            raise ValueError("Final-fit selection report changed")
+        selected = json.loads(report.read_text())
+        if not selected.get("full_heldout_validation"):
+            raise ValueError("Final fit needs a previous full held-out selection report")
     if (warm_optimizer or initial_validation_cache is not None) and not init_checkpoint:
         raise ValueError("Warm optimizer/cache require an initialization checkpoint")
     if round_batches is not None and (
@@ -284,7 +298,9 @@ def train(
         )
     output.mkdir(parents=True, exist_ok=True)
     training = select_records(config, "train")
-    from .sequential_policy import validation_records, per_video_scores
+    from .sequential_policy import (
+        validation_records, per_video_scores, assert_family_isolation,
+    )
 
     validation = validation_records(config, training)
     if config["evaluation"].get("validation_images"):
@@ -294,14 +310,17 @@ def train(
         )
     if {r["sequence_id"] for r in training} & {r["sequence_id"] for r in validation}:
         raise ValueError("Sequence leakage between train and validation")
+    assert_family_isolation(training, validation)
     data_hash = digest({"train": training, "val": validation})
     construction = dict(config["model"])
     checkpoint = None
+    saved_coverage = None
     warm_state = None
     initialization = None
     seen_sequences = set()
     if resume:
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
+        saved_coverage = checkpoint.get("training_coverage")
         initialization = checkpoint.get("initialization")
         seen_sequences = set(
             checkpoint.get(
@@ -315,6 +334,8 @@ def train(
                 source_hash.update(chunk)
             stream.seek(0)
             checkpoint = torch.load(stream, map_location="cpu", weights_only=False)
+        if final_fit and selected.get("selected_checkpoint_sha256") != source_hash.hexdigest():
+            raise ValueError("Final-fit source differs from the selected checkpoint")
         if checkpoint["config"]["model"]["name"] != config["model"]["name"]:
             raise ValueError("Initialization must use the same detector family")
         if checkpoint["config"]["model"] != config["model"]:
@@ -335,6 +356,7 @@ def train(
                     "Source split fingerprint differs from initialization checkpoint"
                 )
             seen_sequences = set(source_split["train_sequences"])
+            seen_sequences.update(source_split.get("seen_training_sequences", []))
         if seen_sequences & {record["sequence_id"] for record in validation}:
             raise ValueError(
                 "Initialization would leak supervised training sequences into validation"
@@ -375,6 +397,7 @@ def train(
             }
             initialization["fresh_optimizer_schedule_budget"] = False
             initialization["optimizer_restored_with_new_lr_and_budget"] = True
+    assert_family_isolation(training, validation, seen_sequences)
     model = build_model(
         construction,
         checkpoint.get("adapter") if checkpoint else None,
@@ -413,7 +436,7 @@ def train(
         scaler.load_state_dict(warm_state["scaler"])
         restore_rng(warm_state["rng"], generator)
         warm_state = None
-    start_epoch, best, elapsed_before = 0, -1.0, 0.0
+    start_epoch, best, elapsed_before = 0, None if final_fit else -1.0, 0.0
     pending_validation = None
     if resume:
         # Only load checkpoints you created; torch checkpoints are trusted Python artifacts.
@@ -432,7 +455,9 @@ def train(
         scheduler.load_state_dict(checkpoint["scheduler"])
         scaler.load_state_dict(checkpoint["scaler"])
         restore_rng(checkpoint["rng"], generator)
-        pending_validation = checkpoint.get("validation_pending")
+        pending_validation = checkpoint.get(
+            "training_commit_pending" if final_fit else "validation_pending"
+        )
         start_epoch, best, elapsed_before = (
             checkpoint["epoch"] + (pending_validation is None),
             checkpoint["best"],
@@ -467,6 +492,9 @@ def train(
             "val_ids": [r["id"] for r in validation],
             "train_sequences": sorted({r["sequence_id"] for r in training}),
             "val_sequences": sorted({r["sequence_id"] for r in validation}),
+            "seen_training_sequences": sorted(
+                seen_sequences | {r["sequence_id"] for r in training}
+            ),
         },
     )
     worker_context = "spawn" if validation_pipeline is not None else None
@@ -477,6 +505,8 @@ def train(
     accumulation = tc["accumulation"]
     if accumulation < 1:
         raise ValueError("accumulation must be >= 1")
+
+    coverage = None
 
     def snapshot(epoch, progress=None):
         return {
@@ -491,7 +521,10 @@ def train(
             "best": best,
             "elapsed_seconds": elapsed_before + time.perf_counter() - started,
             "data_fingerprint": data_hash,
-            "validation_pending": progress,
+            "validation_pending": None if final_fit else progress,
+            "training_commit_pending": progress if final_fit else None,
+            "training_coverage": coverage.report(len(training)) if coverage else saved_coverage,
+            "evaluation_status": "no_independent_validation_final_fit" if final_fit else "held_out",
             "initialization": initialization,
             "seen_training_sequences": sorted(seen_sequences),
             "execution": {
@@ -502,7 +535,8 @@ def train(
         }
 
     if (
-        initialization
+        not final_fit
+        and initialization
         and start_epoch == 0
         and (
             not (output / "initial_validation.json").is_file()
@@ -558,9 +592,13 @@ def train(
         del initial_predictions, initial_payload
         print(f"Initial validation mAP={best:.4f}", flush=True)
 
+    if final_fit and not resume:
+        atomic_checkpoint(output / "last.pt", snapshot(-1))
+        print("Final train+val fit: validation AP is intentionally unavailable", flush=True)
+
     validation_job = None
     for epoch in range(start_epoch, tc["epochs"]):
-        if pending_validation is None and early_stopping_reached(config, output):
+        if not final_fit and pending_validation is None and early_stopping_reached(config, output):
             print(
                 "EARLY STOP: validation improvement below patience threshold",
                 flush=True,
@@ -572,6 +610,9 @@ def train(
         ):
             break
         if pending_validation is None:
+            from .training_coverage import TrainingCoverage
+
+            coverage = TrainingCoverage()
             if validation_pipeline is not None:
                 validation_pipeline.memory_gate()
             training_mode(model, tc)
@@ -598,6 +639,7 @@ def train(
                 scaler.scale(loss / group_size).backward()
                 total_loss += loss.item()
                 observed += 1
+                coverage.update(metadata)
                 seen_sequences.update(
                     meta["record"]["sequence_id"] for meta in metadata
                 )
@@ -650,16 +692,45 @@ def train(
                 f"epoch={epoch} training complete; checkpoint saved; running validation",
                 flush=True,
             )
+            write_json(output / f"coverage_epoch_{epoch:04d}.json", coverage.report(len(training)))
         else:
             total_loss, observed, batches, stop = (
                 pending_validation[key]
                 for key in ("loss_sum", "observed", "batches", "stop")
             )
+            if saved_coverage:
+                write_json(output / f"coverage_epoch_{epoch:04d}.json", saved_coverage)
             print(
                 f"epoch={epoch} resuming saved validation; no training batches repeated",
                 flush=True,
             )
         pending_validation = None
+        if final_fit:
+            log = {
+                "epoch": epoch, "train_loss": total_loss / observed,
+                "train_batches": observed, "train_batches_planned": batches,
+                "epoch_complete": observed == batches,
+                "elapsed_seconds": elapsed_before + time.perf_counter() - started,
+                "dataset_size": len(training),
+                "evaluation_status": "no_independent_validation_final_fit",
+                "lr": [group["lr"] for group in optimizer.param_groups],
+            }
+            history_path = output / "history.jsonl"
+            old_epochs = {
+                json.loads(line)["epoch"] for line in history_path.read_text().splitlines()
+                if line.strip()
+            } if history_path.exists() else set()
+            if epoch not in old_epochs:
+                with history_path.open("a") as stream:
+                    stream.write(json.dumps(log, allow_nan=False) + "\n")
+            payload = snapshot(epoch)
+            atomic_checkpoint(output / "last.pt", payload)
+            atomic_checkpoint(output / "final.pt", payload)
+            write_json(output / "final_training.json", log)
+            print(f"epoch={epoch} final-fit frames={observed}/{len(training)} loss={total_loss / observed:.4f}; no validation AP", flush=True)
+            if stop or yield_after_epoch:
+                break
+            continue
         if validation_pipeline is not None:
             # Bound host memory: never collect a second validation prediction
             # set while CPU metrics still retain the previous set.

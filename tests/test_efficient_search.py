@@ -320,7 +320,9 @@ def test_full_confirmation_requires_native_and_tiled_gains(
         write_json(folder / "config.json", config)
         write_json(folder / "split.json", {"train_sequences": ["training_flight"]})
     monkeypatch.setattr(
-        prepare, "select_records", lambda *a: [{"id": 0, "sequence_id": "held_out"}]
+        prepare, "select_records", lambda *a: [
+            {"id": i, "sequence_id": f"held_out_{i}"} for i in range(4)
+        ]
     )
     calls = []
 
@@ -339,6 +341,38 @@ def test_full_confirmation_requires_native_and_tiled_gains(
     result = search.confirm(tmp_path, candidate, original, 0.001, False)
     assert result["accepted"] == accepted
     assert len(calls) == calls_expected
+
+
+def test_confirmation_filters_related_and_inherited_families(tmp_path, monkeypatch):
+    from cvlab import prepare
+
+    original = tmp_path / "runs/rtdetr_fold0_local"
+    candidate = tmp_path / "candidate"
+    config = load_config(Path(__file__).parents[1] / "configs/rtdetr.yaml")
+    for folder in (original, candidate):
+        write_json(folder / "config.json", config)
+        write_json(folder / "split.json", {
+            "train_sequences": ["uav1_a"],
+            "seen_training_sequences": ["uav2_a"],
+        })
+    records = [{"id": i, "sequence_id": f"uav{i}_b"} for i in range(1, 7)]
+    monkeypatch.setattr(prepare, "select_records", lambda *a: records)
+    calls = []
+
+    def score(work, checkpoint, cfg, selected, **kwargs):
+        calls.append([r["sequence_id"] for r in selected])
+        return {"metrics": {"coco100": {"mAP": 0.2}}}
+
+    monkeypatch.setattr(search, "_score", score)
+    result = search.confirm(tmp_path, candidate, original, 0.001, False)
+    assert calls == [[f"uav{i}_b" for i in range(3, 7)]] * 2
+    assert result["native_frames"] == 4
+    assert result["native_excluded_related_frames"] == 2
+    assert not result["accepted"]
+    monkeypatch.setattr(prepare, "select_records", lambda *a: records[:4])
+    with pytest.raises(ValueError, match="four unseen"):
+        search.confirm(tmp_path, candidate, original, 0.001, False)
+    assert len(calls) == 2  # Rejected before spending any scoring compute.
 
 
 def test_wall_budget_commits_partial_training_instead_of_killing_process(

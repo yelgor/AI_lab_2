@@ -1,0 +1,108 @@
+import copy
+import json
+from pathlib import Path
+
+import pytest
+import torch
+
+from cvlab.common import read_json, write_json
+from cvlab.full_data import joint_manifest, manifest_summary, recipe, sha256
+from test_crop_finetune import tiny_run  # noqa: F401
+from test_pipeline import competition  # noqa: F401
+
+
+def test_joint_manifest_rekeys_colliding_ids_without_mutating_sources(tmp_path):
+    records = [{"id": 1, "sequence_id": "uav1_a", "frame_id": 1, "file_name": "train/a.jpg"}]
+    validation = [{"id": 1, "sequence_id": "uav2_a", "frame_id": 1, "file_name": "val/b.jpg"}]
+    write_json(tmp_path / "train.json", {"images": records})
+    write_json(tmp_path / "val.json", {"images": validation})
+    source_sha = sha256(tmp_path / "train.json")
+    out = tmp_path / "joint/trainval.json"
+    summary = joint_manifest(tmp_path, out)
+    assert summary["frames"] == 2 and summary["source_counts"] == {"train": 1, "val": 1}
+    merged = read_json(out)["images"]
+    assert [r["id"] for r in merged] == [1, 2]
+    assert [r["origin_id"] for r in merged] == [1, 1]
+    assert [r["origin_split"] for r in merged] == ["train", "val"]
+    assert sha256(tmp_path / "train.json") == source_sha
+    assert joint_manifest(tmp_path, out) == summary
+    assert manifest_summary(tmp_path)["train"]["frames"] == 1
+    validation[0]["sequence_id"] = "uav1_b"
+    write_json(tmp_path / "val.json", {"images": validation})
+    with pytest.raises(ValueError, match="families overlap"):
+        manifest_summary(tmp_path)
+
+
+def test_final_fit_trains_all_labels_without_inventing_validation_AP(tiny_run, tmp_path, monkeypatch):  # noqa: F811
+    from cvlab import engine
+    from cvlab.prepare import select_records
+
+    source = Path(tiny_run["output"]) / "best.pt"
+    merged = tmp_path / "joint.json"
+    summary = joint_manifest(tiny_run["data"]["prepared"], merged)
+    report = tmp_path / "selection_report.json"
+    write_json(report, {"full_heldout_validation": True, "selected_checkpoint_sha256": sha256(source)})
+    config = recipe(tiny_run, tmp_path / "final", epochs=1, final=True, manifest=merged, report=report)
+    config["loader"].update(workers=0, pin_memory=False)
+    monkeypatch.setattr(engine, "predict", lambda *a, **kw: pytest.fail("Final fit must not evaluate seen validation"))
+    engine.train(config, init_checkpoint=source, warm_optimizer=True)
+    output = Path(config["output"])
+    checkpoint = torch.load(output / "final.pt", weights_only=False)
+    assert checkpoint["best"] is None
+    assert checkpoint["evaluation_status"] == "no_independent_validation_final_fit"
+    assert not (output / "best.pt").exists()
+    row = json.loads((output / "history.jsonl").read_text())
+    assert "metrics" not in row and "mAP" not in row
+    assert row["train_batches"] == summary["frames"] == 8
+    assert checkpoint["training_coverage"]["unique_frames"] == 8
+    assert checkpoint["validation_pending"] is None
+    with pytest.raises(ValueError, match="no independent validation"):
+        select_records(config, "val")
+    report.write_text("{}")
+    with pytest.raises(ValueError, match="report changed"):
+        engine.train(config, resume=output / "last.pt")
+
+
+def test_full_data_controller_runs_both_real_training_phases_and_does_not_repeat(tiny_run, tmp_path, monkeypatch):  # noqa: F811
+    from cvlab import efficient_search, tiled_inference
+    from cvlab.full_data import run
+
+    work = tmp_path / "work"
+    work.mkdir()
+    source = Path(tiny_run["output"])
+    original_sha = sha256(source / "best.pt")
+
+    def score(work, checkpoint, config, records, **kwargs):
+        assert len(records) == 2  # Full official validation, no fold/probe.
+        return {"metrics": {"coco100": {"mAP": 0.2 if checkpoint.parent == source else 0.21}}}
+
+    def export(model, config, records, device, options, path, checkpoint_sha):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("image_id,PredictionString\nz_0000001,0 0.9 1 1 5 5\n")
+        write_json(path.with_suffix(".csv.metadata.json"), {
+            "checkpoint_sha256": checkpoint_sha,
+            "validation": {"sha256": sha256(path), "valid": True},
+        })
+
+    monkeypatch.setattr(efficient_search, "_score", score)
+    monkeypatch.setattr(tiled_inference, "export_tiled", export)
+    # Keep the tiny fixture's no-worker CPU configuration for both recipes.
+    from cvlab import full_data
+    real_recipe = full_data.recipe
+    def tiny_recipe(*args, **kwargs):
+        config = real_recipe(*args, **kwargs)
+        config["loader"].update(workers=0, pin_memory=False)
+        return config
+    monkeypatch.setattr(full_data, "recipe", tiny_recipe)
+    state = run(work, source, selection_epochs=1, final_epochs=1)
+    assert state["status"] == "READY_FOR_KAGGLE"
+    selection = work / "runs/rtdetr_full_train_selection"
+    final = work / "runs/rtdetr_full_data_final"
+    assert read_json(selection / "coverage_summary.json")["dataset_size"] == 6
+    assert read_json(final / "coverage_summary.json")["dataset_size"] == 8
+    report = read_json(work / "full_data/selection_report.json")
+    assert report["full_heldout_validation"] and report["frames"] == 2
+    checkpoint = torch.load(final / "final.pt", weights_only=False)
+    assert checkpoint["best"] is None
+    assert sha256(source / "best.pt") == original_sha
+    assert run(work, source, selection_epochs=1, final_epochs=1) == state

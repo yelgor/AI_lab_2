@@ -1,0 +1,56 @@
+# New family-grouped experiment only; never resume legacy fine-tuned weights across changed folds.
+seed: 42
+output: runs/rtdetr_family_generalization_fold0
+data:
+  root: /kaggle/input/REPLACE_WITH_DATASET
+  prepared: prepared
+  split: fold
+  fold: 0
+  frame_step: 1
+  horizontal_flip: 0.5
+  ignore_policy: mask
+  folds_file: folds_family_v1.json
+model:
+  name: rtdetr
+  pretrained: true
+  image_size: 960
+  max_detections: 500
+  score_threshold: 0.001
+  weights: PekingU/rtdetr_r50vd
+  num_queries: 500
+  num_denoising: 100
+  box_loss: giou
+loader:
+  batch_size: 1
+  workers: 2
+  pin_memory: true
+  prefetch_factor: 1
+  persistent_workers: false
+  sampling: flight_time
+  temporal_bins: 8
+train:
+  epochs: 20
+  max_hours: 2
+  lr: 0.0001
+  backbone_lr_factor: 0.1
+  weight_decay: 0.0001
+  accumulation: 2
+  clip_grad: 1.0
+  max_batches_per_epoch: 2000
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.001
+  freeze_batch_norm: true
+runtime:
+  device: cuda
+  precision: fp16
+  cpu_threads: 4
+  tf32: false
+  deterministic: false
+evaluation:
+  max_detections:
+  - 100
+  - 500
+  warmup_batches: 2
+  validation_images: 512
+  independent_video_families: true
+  per_video_metrics: true

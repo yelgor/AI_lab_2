@@ -19,6 +19,8 @@ from .sequential_policy import (
     video_family,
 )
 
+CONFIRMATION_PROTOCOL = "unseen-flight-families-v2"
+
 
 def probe_config(source, output, lr, probe_images):
     config = copy.deepcopy(source)
@@ -50,6 +52,8 @@ def full_config(source, *, official=False):
     if official:
         config["data"]["split"] = "official"
     config["loader"].update(batch_size=1, workers=0, persistent_workers=False)
+    for key in ("sampling", "temporal_bins"):
+        config["loader"].pop(key, None)
     return config
 
 
@@ -162,25 +166,50 @@ def confirm(work, candidate, champion, min_gain, export_tiles):
     candidate, champion = Path(candidate), Path(champion)
     config = full_config(read_json(candidate / "config.json"))
     original = read_json(work / "runs/rtdetr_fold0_local/config.json")
-    # Both contenders are evaluated with the same complete original holdout and precision.
-    records = select_records(full_config(original), "val")
+    # A clip-disjoint historical fold can still contain related flight excerpts.
+    # Include inherited training exposure recorded by newer engine versions.
+    seen = set()
+    for run in {candidate, champion, work / "runs/rtdetr_fold0_local"}:
+        split = read_json(run / "split.json")
+        seen.update(video_family(s) for s in split["train_sequences"])
+        seen.update(video_family(s) for s in split.get("seen_training_sequences", []))
+    raw_records = select_records(full_config(original), "val")
+    records = [r for r in raw_records if video_family(r["sequence_id"]) not in seen]
+    families = {video_family(r["sequence_id"]) for r in records}
+    if len(families) < 4:
+        raise ValueError("Full confirmation needs at least four unseen flight families")
     old = _score(work, champion / "best.pt", config, records)
     new = _score(work, candidate / "best.pt", config, records)
     native_gain = new["metrics"]["coco100"]["mAP"] - old["metrics"]["coco100"]["mAP"]
-    result = {"accepted": False, "native_gain": native_gain}
+    result = {
+        "accepted": False, "native_gain": native_gain,
+        "confirmation_protocol": CONFIRMATION_PROTOCOL,
+        "native_frames": len(records), "native_families": len(families),
+        "native_excluded_related_frames": len(raw_records) - len(records),
+        "native_data_fingerprint": digest(records),
+        "native_per_class_gain": {
+            name: value - old["metrics"]["coco100"].get("per_class", {}).get(name, value)
+            for name, value in new["metrics"]["coco100"].get("per_class", {}).items()
+            if value is not None
+            and old["metrics"]["coco100"].get("per_class", {}).get(name) is not None
+        },
+    }
     if native_gain < min_gain:
         return result
     official = full_config(config, official=True)
     records = select_records(official, "val")
-    seen = {
-        video_family(s) for s in read_json(candidate / "split.json")["train_sequences"]
-    }
     if seen & {video_family(r["sequence_id"]) for r in records}:
         raise ValueError("Official confirmation includes training video families")
     old = _score(work, champion / "best.pt", official, records, tiled=True)
     new = _score(work, candidate / "best.pt", official, records, tiled=True)
     tiled_gain = new["metrics"]["coco100"]["mAP"] - old["metrics"]["coco100"]["mAP"]
     result.update(tiled_gain=tiled_gain, accepted=tiled_gain >= min_gain)
+    result["tiled_per_class_gain"] = {
+        name: value - old["metrics"]["coco100"].get("per_class", {}).get(name, value)
+        for name, value in new["metrics"]["coco100"].get("per_class", {}).items()
+        if value is not None
+        and old["metrics"]["coco100"].get("per_class", {}).get(name) is not None
+    }
     if result["accepted"] and export_tiles:
         sha = file_hash(candidate / "best.pt")
         destination = work / "submissions" / f"rtdetr_{sha[:12]}_efficient_tiles.csv"
@@ -482,7 +511,10 @@ def run(
                             "metrics"
                         ],
                     )
-                confirmed = {c["checkpoint_sha256"] for c in cycle["confirmations"]}
+                confirmed = {
+                    c["checkpoint_sha256"] for c in cycle["confirmations"]
+                    if c.get("confirmation_protocol") == CONFIRMATION_PROTOCOL
+                }
                 eligible = sorted(
                     (
                         o
@@ -505,6 +537,7 @@ def run(
                             c
                             for c in cycle["confirmations"]
                             if c["checkpoint_sha256"] == candidate["checkpoint_sha256"]
+                            and c.get("confirmation_protocol") == CONFIRMATION_PROTOCOL
                         ),
                         None,
                     )

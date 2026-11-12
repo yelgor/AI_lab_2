@@ -112,7 +112,8 @@ def validation_subset(config, limit):
     mode = config["data"]["split"]
     if mode == "fold":
         manifest = prepared / "train.json"
-        fold = read_json(prepared / "folds.json")["folds"][config["data"]["fold"]]
+        folds_file = prepared / config["data"].get("folds_file", "folds.json")
+        fold = read_json(folds_file)["folds"][config["data"]["fold"]]
         sequences = set(fold["val_sequences"])
     elif mode == "official":
         manifest, sequences = prepared / "val.json", None

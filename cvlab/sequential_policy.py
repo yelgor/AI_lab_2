@@ -11,7 +11,22 @@ def video_family(sequence):
     return sequence.split("_", 1)[0] if sequence.startswith("uav") else sequence
 
 
+def assert_family_isolation(training, validation, inherited_sequences=()):
+    seen = {video_family(r["sequence_id"]) for r in training}
+    seen.update(video_family(s) for s in inherited_sequences)
+    overlap = seen & {video_family(r["sequence_id"]) for r in validation}
+    if overlap:
+        raise ValueError(
+            "Training/validation flight-family leakage (including inherited weights): "
+            + ", ".join(sorted(overlap))
+        )
+
+
 def validation_records(config, training):
+    if config["evaluation"].get("mode") == "full_data_final_fit":
+        if config["data"]["split"] != "full_train_val":
+            raise ValueError("Final fit requires explicit full_train_val data")
+        return []
     from .prepare import select_records
     from .inference_experiments import balanced_subset
 

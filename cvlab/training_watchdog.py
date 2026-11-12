@@ -104,6 +104,8 @@ def cvlab_processes(project, work, proc=Path("/proc")):
                 Path(a).name
                 in {
                     "start_efficient_search.py",
+                    "start_sampling_experiment.py",
+                    "start_full_data_training.py",
                     "start_adaptive_finetune.py",
                     "local_gpu_queue.py",
                     "start_overlap_queue.py",
@@ -180,11 +182,12 @@ def gpu_info(index):
 def controller_summary(path):
     value = read_json(path, {})
     cycles = value.get("cycles", [])
+    confirmations = [c for cycle in cycles for c in cycle.get("confirmations", [])]
+    confirmations.extend(value.get("external_promotions", []))
     submissions = sorted(
         {
             c["submission"]
-            for cycle in cycles
-            for c in cycle.get("confirmations", [])
+            for c in confirmations
             if c.get("submission")
         }
     )
@@ -228,6 +231,13 @@ def snapshot(config, state):
         "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
     }
     if writable:
+        full_data = read_json(work / "full_data/state.json", {})
+        result["full_data"] = {
+            key: full_data[key] for key in ("status", "data", "joint_manifest", "submission")
+            if key in full_data
+        }
+        if full_data.get("status") == "READY_FOR_KAGGLE" and full_data.get("submission"):
+            result["controller"].setdefault("submissions", []).append(full_data["submission"])
         logs = list((work / "logs").glob("*.log"))
         if logs:
             latest = max(logs, key=lambda path: path.stat().st_mtime)
@@ -248,7 +258,11 @@ def snapshot(config, state):
                     )
                 )
             ]
-            result.update(log=str(latest), progress=progress[-1] if progress else None)
+            result.update(
+                log=str(latest),
+                log_mtime=latest.stat().st_mtime,
+                progress=progress[-1] if progress else None,
+            )
     if state.get("active_job"):
         job = read_json(state["active_job"], {})
         result["job"] = job
@@ -669,6 +683,7 @@ class Watchdog:
             sample["cpu_ticks"],
             sample["io_bytes"],
             sample.get("controller"),
+            sample.get("full_data"),
             os.path.getmtime(Path(config["work"]) / "logs/watchdog_training.log")
             if sample["writable"]
             and (Path(config["work"]) / "logs/watchdog_training.log").exists()
@@ -682,13 +697,21 @@ class Watchdog:
             or sample["gpu"].get("utilization", 0) >= 10
         ):
             state.update(activity=activity, last_activity=now)
+        progress_signature = (
+            sample.get("log"),
+            sample.get("log_mtime"),
+            sample.get("progress"),
+        )
+        if progress_signature != state.get("progress_signature"):
+            state.update(progress_signature=progress_signature, last_progress=now)
         if (
             action == "monitor"
-            and now - state.get("last_activity", now) >= config["stall_minutes"] * 60
+            and now - state.get("last_progress", now)
+            >= config["stall_minutes"] * 60
         ):
             self.event(
                 "quiet_process",
-                "No observed CPU, I/O, GPU or log progress; inspect the live process (it was preserved)",
+                "Training log made no progress within the stall window; inspect the live process (it was preserved)",
             )
         for submission in sample.get("controller", {}).get("submissions", []):
             if submission not in state.setdefault("seen_submissions", []):
