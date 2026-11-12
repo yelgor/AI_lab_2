@@ -577,3 +577,21 @@ Linux work. Watchdog перейшов у `monitor`; початковий quiet-p
 новий процес. Після baseline стежити за frame/batch прогресом, VRAM/RAM/swap,
 температурою, вільним місцем і checkpoint-ами; оцінювати тільки повну validation
 та tiled family/class gates. Немає нового CSV чи Kaggle score.
+
+
+### Негайна пауза c1 batch-2 — 2026-11-12, 20:50 EET
+
+На пряме прохання користувача service `cvlab-c1-batch2` негайно заморожено через
+systemd cgroup freezer; `FreezerState=frozen`, unit лишається active, stdout
+collector і watchdog не зупиняв. STOP-файл selection-run збережений, тому після
+відновлення процесу він доробить цю епоху/validation і не почне наступну. На
+момент паузи останній рядок — epoch 0, batch 11,500/12,101, mean loss 12.5804.
+Після замороження GPU utilization впав до 0%, VRAM 5.2 GiB лишається зарезервованою;
+checkpoints c1 та public-best не змінені.
+
+Важливе обмеження відновлення: `last.pt` у `WORK/runs/rtdetr_c1_batch2_train_selection/`
+ще збережений на старті (до першого epoch update). Точний mid-epoch optimizer/RNG
+контекст є лише в RAM замороженого процесу й не є reboot-safe. Якщо процес/машина
+буде завершена, наступний запуск повторить цей epoch від останнього дискового
+checkpoint; source c1 залишається неушкодженим. Не видаляти STOP або заморожений
+unit, доки користувач явно не відновить роботу.
