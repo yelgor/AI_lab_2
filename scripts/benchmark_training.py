@@ -286,7 +286,7 @@ def main(argv=None):
         if device.type == "cuda":
             total = torch.cuda.get_device_properties(device).total_memory
             torch.cuda.set_per_process_memory_fraction(
-                min(0.9, args.vram_gib * 2**30 / total), device
+                min(0.9, args.vram_gib * 2**30 / total), torch.cuda.current_device()
             )
         output = (
             work
