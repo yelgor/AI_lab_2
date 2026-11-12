@@ -490,3 +490,34 @@ reference/optimized parameter and AdamW-state equality, nonfinite-loss rejection
 before updates, accumulation tails, source-preserving real benchmark execution,
 physical-batch coverage and validation-batch/cache identities. Actual GPU frames/s
 and AP improvement remain unmeasured. Local benchmark results must supply them.
+
+### Локальна перевірка плану та benchmark throughput — 2026-11-12, 18:16 EET
+
+Виконано CPU artifact audit, власник GPU звірений безпосередньо. Новий alpha=.5
+процес не завершився: збережено лише повний native результат `0.1916993` проти
+source `0.1821884` (gain `+0.0095108`); процес зник до tiled gate, тому CSV немає
+і цей результат не приймається за selection. До цього стартував batch benchmark;
+два виправлення в `scripts/benchmark_training.py` (CUDA device index і копія
+adapter metadata на кожен repeat) опубліковані окремими commits.
+
+Завершений source-preserving benchmark використав checkpoint
+`c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`, effective
+batch 4, 20 optimizer-update boundaries на вимір і 2 repeats. Median pipeline
+throughput: batch1/accumulation4 `3.9981` frames/s з readback per minibatch;
+batch1/accumulation4 `4.0125` з readback per update (`+0.36%`); batch2/accumulation2
+`4.3627` per minibatch (`+9.12%`); batch2/accumulation2 `4.5668` per update
+(`+14.22%`) проти reference. Report позначає batch2/per-update як measured faster,
+але якість не вимірювалася. Source checkpoint перевірено тим самим SHA до/після;
+`models_saved=false`. Це пропонує окремий c1-initialized batch2 plan для robust
+class/family validation, але не дозволяє перемикати поточний plan або оголосити
+поліпшення AP/Kaggle. Loss `batch2` також відрізнявся від `batch1`; фізичний batch
+може міняти RT-DETR loss/denoising.
+
+Локальний JSON лишився у `WORK/benchmarks/training_20261112T161141_8e1c6551.json`;
+machine telemetry/checkpoint-и не комітяться. Перевірка після benchmark: активного
+training/evaluation процесу немає; `cvlab-full-data-c1` та sampling service inactive,
+watchdog active з pause marker, final-fit STOP лишився. Work data volume read-only;
+final train+val не запускався. Наступне рішення: зберігати c1 source й окремим
+plan наздогнати throughput batch2, але запускати лише з robust source-bound gates,
+збереженим STOP для final-fit і writable storage. OOF/public score не виводити з
+цього benchmark.
