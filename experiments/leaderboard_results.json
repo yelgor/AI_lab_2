@@ -81,6 +81,21 @@
       "gap_to_baseline": 0.0248414489,
       "gap_to_user_target": 0.0832089909,
       "status": "Highest observed public score at the time of this update; preserve its verified local checkpoint and original public-best fallback."
+    },
+    {
+      "file": "rtdetr_c1d7fcc83dde_trial0_6000_tiles.csv",
+      "model": "rtdetr",
+      "checkpoint_sha256_prefix": "c1d7fcc83dde",
+      "checkpoint_identity_note": "Prefix and trial label read from the submitted filename; full hashes, dataset coverage and training history require local verification.",
+      "inference": "tiled export (as named in the submitted file)",
+      "public_score": 0.2021478454,
+      "evidence": "User-provided Kaggle submission screenshot on 2026-11-12; status Complete",
+      "baseline_exceeded": false,
+      "target_reached": false,
+      "gain_vs_previous_public_best": 0.0053568363,
+      "gap_to_baseline": 0.0194846126,
+      "gap_to_user_target": 0.0778521546,
+      "status": "Highest observed public score at the time of this update; full local provenance verification pending."
     }
   ],
   "baseline_public_score": 0.221632458,
