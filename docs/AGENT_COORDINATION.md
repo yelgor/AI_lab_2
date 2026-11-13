@@ -621,3 +621,14 @@ Service увімкнений для відновлення після boot і м
 і бачить процес як `monitor`. CSV не готовий, на Kaggle нічого не подано.
 Наступний критерій — завершений повний epoch, збережений optimizer/checkpoint,
 повна validation і robust gates; loss окремо не вважати доказом якості.
+
+
+### Початкова validation і train progress — 2026-11-13, 22:02 EET
+
+У новому `c1_batch2_retry1` завершено повну native validation для того самого
+official cohort із 2,846 кадрів: initial local COCO100 mAP `0.1822042`, pipeline
+inference `14.7098` кадр/с. Це baseline до gradient updates, не Kaggle score.
+Epoch 1/2 почалася на всіх 24,201 train frames; на 22:02 записано batch
+250/12,101 з cumulative mean loss `12.9210`. Ще немає завершеного epoch
+checkpoint, post-training AP чи нового CSV. Batch=2 має інші batch dynamics;
+висновок лише після повної validation та source-bound gates.
