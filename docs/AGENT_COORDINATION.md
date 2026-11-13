@@ -595,3 +595,29 @@ checkpoints c1 та public-best не змінені.
 буде завершена, наступний запуск повторить цей epoch від останнього дискового
 checkpoint; source c1 залишається неушкодженим. Не видаляти STOP або заморожений
 unit, доки користувач явно не відновить роботу.
+
+
+### Відновлення після shutdown і новий c1 selection — 2026-11-13, 21:51 EET
+
+Перевірено journal і поточну систему після reboot: попередній frozen unit було
+зупинено системою 2026-11-12 о 20:53 EET. На диску немає завершеного epoch
+checkpoint або `history.jsonl`; `last.pt` лишився стартовим. Незбережені 11,500
+batch-ів не відновлюються після reboot. Старий `c1_batch2` план/STOP збережені як
+історія; public-best source `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`
+перевірений і незмінний. Старий увімкнений batch-1 c1 service вимкнено, бо його
+плановий deadline вже минув.
+
+За чинним full-data протоколом незавершений epoch доводиться повторити від
+останнього committed checkpoint, оскільки mid-epoch cursor recovery не
+реалізований. Створено окремий bounded `c1_batch2_retry1` plan/service від c1:
+2 full selection epochs, batch=2/accumulation=2, full official validation,
+source-bound native+tiled family/class gates, новий восьмигодинний deadline.
+Service увімкнений для відновлення після boot і має sleep inhibition; auto-retry
+обмежений systemd start limit. Фінальний train+val має окремий STOP. Work storage
+проходить 8 GiB admission, підготовлені manifests читаються з read-only NTFS.
+
+О 21:51 служба пройшла CUDA/data preflight, завантажила c1 і рахує початкову
+повну validation оцінку; train batches і новий AP ще не записані. Watchdog active
+і бачить процес як `monitor`. CSV не готовий, на Kaggle нічого не подано.
+Наступний критерій — завершений повний epoch, збережений optimizer/checkpoint,
+повна validation і robust gates; loss окремо не вважати доказом якості.
