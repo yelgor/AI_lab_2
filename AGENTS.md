@@ -14,6 +14,12 @@
    використовувати застарілий AP-only gate як дозвіл на promotion/export.
 7. Для оптимізації самого циклу — [вимірювання training throughput](docs/training_performance.md).
    Не називати зменшення loss-readback або CPU-тест виміряним GPU speedup/AP gain.
+8. Актуальна зміна стратегії 2026-11-14:
+   [YOLO11s challenger](docs/yolo_strategy.md) як наступний головний експеримент;
+   [безперервний RT-DETR control](docs/continuous_training.md).
+   Class/family promotion guards не є автоматичною причиною обривати continuous
+   course після однієї епохи. Не запускати нові одноепохові VFL/LR trials замість
+   фіксованого курсу. Дочекатися збереженої межі чинного процесу й зберегти c1.
 
 ## Режим спільної роботи
 

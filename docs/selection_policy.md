@@ -6,6 +6,13 @@ interpolation invocations. Existing running Python processes retain their loaded
 code; apply updates at a safe saved boundary, preserving healthy work and the GPU
 lease. The original public-best c1 checkpoint remains immutable.
 
+Update 2026-11-14: [continuous training](continuous_training.md) separates
+convergence from final promotion. Legacy `strict` plans retain the hard-stop
+behavior below. New continuous courses preserve class/family evidence but do not
+stop after one improving epoch solely because a promotion guard rejects it.
+The separate [YOLO11s challenger](yolo_strategy.md) uses full common validation
+and review-only exports; it does not claim automatic promotion from AP alone.
+
 ## Acceptance
 
 Both native and fixed tiled full-validation comparisons must pass
@@ -31,7 +38,7 @@ significance or Kaggle improvement claim. Family AP and pooled AP are different
 estimands. Exact parity with the competition Evaluation implementation still
 needs verification. Do not tune these thresholds simply to admit a rejected run.
 
-Full-data training selects `best.pt` from candidates passing the native guards
+Legacy strict full-data training selects `best.pt` from candidates passing the native guards
 against initialization, ranked by family lower-bound gain then pooled gain.
 A higher pooled AP alone cannot overwrite a robust checkpoint. Each row logs
 `selection_decision`; a completed full-data epoch with an excessive class/family/

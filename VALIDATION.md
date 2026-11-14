@@ -206,3 +206,28 @@ validation, interruption recovery without repeated training, immutable earlier
 checkpoints, reuse across search cycles, and launcher/CLI GPU-lease handling.
 These CPU checks validate the controller; they do not establish a Kaggle gain.
 
+## Continuous course and YOLO challenger — 2026-11-14
+
+Full CPU regression run: **325 passed, 1 CUDA test skipped**, 14 existing
+Matplotlib/Pyparsing warnings. The optional YOLO module's five focused tests
+also pass, including the additional evaluation-RNG isolation check. Ruff and
+`git diff --check` pass.
+
+Continuous-course coverage includes three sequential full epochs despite class
+diagnostics, preserved checkpoint archives and user STOP, actual optimizer and
+scheduler continuation through an explicit strict→continuous transition,
+rejection of a changed LR on resume, recovery of a previous training best and
+plateau stopping without launching a new recipe.
+
+YOLO coverage includes streamed manifest conversion without copying images,
+flight isolation, refused manifest drift, ignored-region masks preserving known
+targets, eight-class mapping, a real CPU YOLO11n YAML forward/backward run,
+unstripped optimizer/checkpoint state, a resumed second epoch, common COCO
+validation on exact saved weights and a structurally verified test CSV.
+The small random-initialized CPU model is only an integration fixture; it is
+not the production COCO-pretrained YOLO11s experiment or a quality result.
+
+The laptop still needs to measure YOLO11s/1280 throughput, peak VRAM/RAM and
+full held-out AP. No GPU speedup, baseline crossing or new Kaggle score is
+established by these checks. See [the strategy and commands](docs/yolo_strategy.md).
+

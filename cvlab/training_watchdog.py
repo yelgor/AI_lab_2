@@ -106,6 +106,7 @@ def cvlab_processes(project, work, proc=Path("/proc")):
                     "start_efficient_search.py",
                     "start_sampling_experiment.py",
                     "start_full_data_training.py",
+                    "start_yolo_training.py",
                     "start_adaptive_finetune.py",
                     "local_gpu_queue.py",
                     "start_overlap_queue.py",

@@ -254,6 +254,25 @@ def training_mode(model, train_config):
                 layer.eval()
 
 
+def resume_comparison_config(old, new, allow_quality_policy_change=False):
+    """Allow an explicit stopping-policy transition, preserving the learned schedule."""
+    if not allow_quality_policy_change:
+        return old
+    import copy
+
+    normalized = copy.deepcopy(old)
+    for section, keys in {
+        "train": ("training_policy", "early_stopping_patience", "early_stopping_min_delta"),
+        "evaluation": ("robust_selection",),
+    }.items():
+        for key in keys:
+            if key in new[section]:
+                normalized[section][key] = new[section][key]
+            else:
+                normalized[section].pop(key, None)
+    return normalized
+
+
 def train(
     config,
     resume=None,
@@ -264,6 +283,7 @@ def train(
     warm_optimizer=False,
     initial_validation_cache=None,
     round_seconds=None,
+    allow_quality_policy_change=False,
 ):
     final_fit = config["evaluation"].get("mode") == "full_data_final_fit"
     if final_fit:
@@ -449,7 +469,7 @@ def train(
     pending_validation = None
     if resume:
         # Only load checkpoints you created; torch checkpoints are trusted Python artifacts.
-        old = checkpoint["config"]
+        old = resume_comparison_config(checkpoint["config"], config, allow_quality_policy_change)
         for section in ("model", "train", "seed", "evaluation", "runtime", "loader"):
             if old[section] != config[section]:
                 raise ValueError(
@@ -459,6 +479,13 @@ def train(
             raise ValueError("Resume data/splits differ from checkpoint")
         if protocol_fingerprint(old) != protocol_fingerprint(config):
             raise ValueError("Resume experiment protocol differs from checkpoint")
+        if allow_quality_policy_change and old != checkpoint["config"]:
+            write_json(output / "quality_policy_transition.json", {
+                "from": {k: checkpoint["config"][k] for k in ("train", "evaluation")},
+                "to": {k: config[k] for k in ("train", "evaluation")},
+                "resume_checkpoint": str(resume), "epoch": checkpoint["epoch"],
+                "optimizer_scheduler_scaler_rng": "restored unchanged from last.pt",
+            })
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
@@ -467,6 +494,23 @@ def train(
         pending_validation = checkpoint.get(
             "training_commit_pending" if final_fit else "validation_pending"
         )
+        if (allow_quality_policy_change and pending_validation is None and not final_fit
+                and checkpoint["config"]["evaluation"].get("robust_selection")
+                and not config["evaluation"].get("robust_selection")):
+            history = output / "history.jsonl"
+            completed = [json.loads(line) for line in history.read_text().splitlines() if line.strip()] if history.is_file() else []
+            measured = next((r for r in completed if r["epoch"] == checkpoint["epoch"]), None)
+            score = measured.get("metrics", {}).get("coco100", {}).get("mAP") if measured else None
+            if score is not None and score > checkpoint["best"]:
+                # The saved candidate is now eligible as a training best, without
+                # declaring it accepted for export or restarting optimization.
+                checkpoint["best"] = score
+                atomic_checkpoint(output / "best.pt", {**checkpoint, "config": config})
+                write_json(output / "best_metrics.json", measured)
+                from .evaluation_receipts import save_training_evaluation
+
+                save_training_evaluation(config, validation, measured["metrics"], measured.get("timing", {}),
+                                         [output / "best.pt"])
         start_epoch, best, elapsed_before = (
             checkpoint["epoch"] + (pending_validation is None),
             checkpoint["best"],

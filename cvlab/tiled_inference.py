@@ -229,7 +229,7 @@ def predict_tiled(model, config, records, device, options, ious=None):
     }
 
 
-def export_tiled(model, config, records, device, options, output, checkpoint_sha):
+def export_tiled(model, config, records, device, options, output, checkpoint_sha, *, announce_ready=True):
     from scripts.check_lab import validate_submission
 
     output = Path(output)
@@ -304,5 +304,6 @@ def export_tiled(model, config, records, device, options, output, checkpoint_sha
             },
         )
         temporary.replace(output)
-        print(f"TILED CANDIDATE READY FOR KAGGLE: {output}", flush=True)
+        label = "TILED CANDIDATE READY FOR KAGGLE" if announce_ready else "CANDIDATE CSV EXPORTED; QUALITY REVIEW REQUIRED"
+        print(f"{label}: {output}", flush=True)
         return checked

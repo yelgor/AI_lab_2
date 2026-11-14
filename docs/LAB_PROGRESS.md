@@ -5,6 +5,12 @@ This is not the student report. Repository files and previously recorded local
 measurements were inspected. Current laptop execution needs a fresh local
 `scripts/check_lab.py` result; Git commits are not live process observations.
 
+Update 2026-11-14: a [YOLO11s strategy](yolo_strategy.md) and
+[continuous-course policy](continuous_training.md) are implemented. They are
+available code, not measured laptop training or a completed extra rubric.
+The earlier order-of-work paragraph below is historical: do not use a
+single-epoch promotion rejection as an automatic continuous-training halt.
+
 | Requirement | Evidence present | Remaining / not established |
 | --- | --- | --- |
 | Data preparation | Conversion, ignored/non-target handling, EDA and GT visualization code; local notes document 24,201 train, 2,846 val and 3,811 test frames | Inspect generated EDA plots/GT boxes and connect observations to experiment choices |

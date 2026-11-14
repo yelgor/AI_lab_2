@@ -134,6 +134,11 @@ def choose_checkpoint(config, output, metrics, previous_best):
     """Select robust weights during training, not only after pooled-AP best overwrites them."""
     score = metrics["coco100"]["mAP"]
     if not config["evaluation"].get("robust_selection", False):
+        if config["train"].get("training_policy") == "continuous":
+            baseline = read_json(Path(output) / "initial_validation.json")["metrics"]
+            decision = assess_metrics(baseline, metrics)
+            decision["purpose"] = "export_diagnostic_only; does not stop training"
+            return score > previous_best, decision
         return score > previous_best, None
     output = Path(output)
     baseline = read_json(output / "initial_validation.json")["metrics"]

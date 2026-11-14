@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import time
 
@@ -72,7 +73,9 @@ def joint_manifest(prepared, destination):
 
 
 def recipe(source_config, output, *, epochs, final=False, manifest=None, report=None,
-           batch_size=1, model_overrides=None):
+           batch_size=1, model_overrides=None, training_policy="continuous"):
+    if training_policy not in ("continuous", "strict"):
+        raise ValueError("training_policy must be continuous or strict")
     config = copy.deepcopy(source_config)
     config["output"] = str(output)
     model_overrides = model_overrides or {}
@@ -110,7 +113,10 @@ def recipe(source_config, output, *, epochs, final=False, manifest=None, report=
     if batch_size != 1:
         config["evaluation"]["validation_batch_size"] = 1
     if not final:
-        config["evaluation"]["robust_selection"] = True
+        config["evaluation"]["robust_selection"] = training_policy == "strict"
+        if training_policy == "continuous":
+            config["train"].update(training_policy="continuous", early_stopping_patience=3,
+                                   early_stopping_min_delta=0.001)
     if final:
         config["evaluation"].pop("robust_selection", None)
         config["data"].update(split="full_train_val", training_manifest=str(manifest))
@@ -124,11 +130,49 @@ def rows(output):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
+def preserve_epoch(output, row):
+    """Immutable epoch checkpoints; links avoid copying on the same filesystem."""
+    import shutil
+
+    output = Path(output)
+    source = output / "last.pt"
+    destination = output / "epochs" / f"epoch_{row['epoch']:04d}.pt"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        try:
+            os.link(source, destination)
+        except OSError:
+            temporary = destination.with_suffix(".tmp")
+            shutil.copyfile(source, temporary)
+            temporary.replace(destination)
+        write_json(destination.with_suffix(".json"), row)
+
+
+def adopt_continuous_policy(output):
+    """Archive a previous quality halt; a user STOP is never removed."""
+    import shutil
+
+    output = Path(output)
+    halt = output / "selection_halt.json"
+    if halt.is_file():
+        halt.replace(output / f"selection_halt.strict_{sha256(halt)[:12]}.json")
+    last = output / "last.pt"
+    if last.is_file():
+        archive = output / "epochs" / f"adopted_last_{sha256(last)[:12]}.pt"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if not archive.exists():
+            try:
+                os.link(last, archive)
+            except OSError:
+                shutil.copyfile(last, archive)
+
+
 def full_epochs(config, source, count, deadline):
-    from .engine import train
+    from .engine import train, early_stopping_reached
     from .score_improvement import release_gpu
 
     output = Path(config["output"])
+    continuous = config["train"].get("training_policy") == "continuous"
     if (output / "selection_halt.json").is_file():
         return False
     existing = rows(output)
@@ -146,19 +190,25 @@ def full_epochs(config, source, count, deadline):
             return False
         if (output / "STOP").exists():
             return False
+        if continuous and early_stopping_reached(config, output):
+            print("Continuous course finished after validation patience; weights retained", flush=True)
+            return True
         before = rows(output)
         last = output / "last.pt"
         print(f"FULL DATA train={count}; validation={'none (final fit)' if config['data']['split']=='full_train_val' else 'full official'}; epoch={len(before)+1}/{config['train']['epochs']}; full pass, no batch cap", flush=True)
         # No round_batches/round_seconds: evaluation boundaries follow full
         # epochs, not a new random prefix. An interrupted unsaved epoch can repeat.
+        options = {"allow_quality_policy_change": True} if continuous and last.exists() else {}
         train(config, resume=last if last.exists() else None,
               init_checkpoint=None if last.exists() else Path(source),
-              warm_optimizer=not last.exists(), yield_after_epoch=True)
+              warm_optimizer=not last.exists(), yield_after_epoch=True, **options)
         release_gpu()
         after = rows(output)
         if len(after) <= len(before):
             raise RuntimeError("Full-data epoch made no committed progress")
         row = after[-1]
+        if continuous and config["evaluation"].get("mode") != "full_data_final_fit":
+            preserve_epoch(output, row)
         coverage = read_json(output / f"coverage_epoch_{row['epoch']:04d}.json")
         expected_batches = math.ceil(count / config.get("loader", {}).get("batch_size", 1))
         if (row["train_batches"] != expected_batches or coverage["unique_frames"] != count
@@ -174,7 +224,7 @@ def full_epochs(config, source, count, deadline):
             "resume_granularity": "full_epoch_boundary; unfinished unsaved epoch may repeat",
         })
         decision = row.get("selection_decision") or {}
-        if not config["evaluation"].get("mode") and set(decision.get("reasons", [])) & {
+        if not continuous and not config["evaluation"].get("mode") and set(decision.get("reasons", [])) & {
             "class_regression", "family_regression", "small_object_regression",
         }:
             write_json(output / "selection_halt.json", decision)
@@ -183,8 +233,8 @@ def full_epochs(config, source, count, deadline):
     return True
 
 
-def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
-        plan_name="default", batch_size=1, model_overrides=None):
+def run(work, source_run, *, hours=8, selection_epochs=5, final_epochs=1,
+        plan_name="default", batch_size=1, model_overrides=None, training_policy=None):
     from .efficient_search import _score, full_config
     from .engine import load_trained, setup
     from .prepare import select_records
@@ -204,7 +254,8 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     source_sha = sha256(source)
     require_training_source(source_sha)
     model_overrides = model_overrides or {}
-    state = read_json(state_path) if state_path.exists() else {
+    existing_plan = state_path.exists()
+    state = read_json(state_path) if existing_plan else {
         "source_sha256": source_sha, "deadline": time.time() + hours * 3600,
         "selection_epochs": selection_epochs, "final_epochs": final_epochs,
         "batch_size": batch_size,
@@ -219,14 +270,27 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
         raise ValueError("Model coefficients changed; use a new plan, preserving the existing run")
     if state.get("finished"):
         return state
+    previous_policy = state.get("training_policy", "strict" if existing_plan else "continuous")
+    selected_policy = training_policy or previous_policy
+    if selected_policy not in ("continuous", "strict"):
+        raise ValueError("training_policy must be continuous or strict")
+    if previous_policy == "continuous" and selected_policy != previous_policy:
+        raise ValueError("Do not turn a continuous course back into strict short trials")
     base = read_json(source_run / "config.json")
     prepared = Path(base["data"]["prepared"])
     counts = manifest_summary(prepared)
     state["data"] = counts
     selection = (work / "runs/rtdetr_full_train_selection" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_train_selection")
+    if selected_policy == "continuous" and previous_policy != "continuous":
+        adopt_continuous_policy(selection)
+        state["quality_policy_transition"] = {
+            "from": previous_policy, "to": selected_policy,
+            "continued_from": str(selection / "last.pt"),
+        }
+    state["training_policy"] = selected_policy
     config = recipe(base, selection, epochs=state["selection_epochs"], batch_size=batch_size,
-                    model_overrides=model_overrides)
+                    model_overrides=model_overrides, training_policy=selected_policy)
     config["evaluation"]["cache_directory"] = str(work / "evaluation_cache")
     state["status"] = "full_train_selection"
     write_json(state_path, state)
@@ -234,6 +298,9 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     if not full_epochs(config, source, counts["train"]["frames"], state["deadline"]):
         if (selection / "selection_halt.json").is_file():
             state.update(status="selection_halted", decision=read_json(selection / "selection_halt.json"))
+            write_json(state_path, state)
+        elif (selection / "STOP").exists():
+            state["status"] = "paused_by_stop"
             write_json(state_path, state)
         return state
     report_path = root / "selection_report.json"
@@ -302,7 +369,7 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
                  else work / "runs" / f"rtdetr_{plan_name}_final")
     final_config = recipe(base, final_run, epochs=state["final_epochs"], final=True,
                           manifest=combined, report=report_path, batch_size=batch_size,
-                          model_overrides=model_overrides)
+                          model_overrides=model_overrides, training_policy=selected_policy)
     state.update(status="full_data_final_fit", joint_manifest=joint,
                  selection_report_sha256=sha256(report_path))
     write_json(state_path, state)

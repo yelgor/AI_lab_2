@@ -692,3 +692,48 @@ CUDA/data manifests доступні, runtime state `full_train_selection`; за
 budget. Вільне Linux work storage невелике, тому перевіряти його протягом запуску.
 Runtime: `WORK/logs/c1_lrhalf_fulltrain.log`,
 `WORK/full_data/c1_lrhalf_fulltrain/state.json`.
+
+### Зміна основної стратегії: YOLO11s та continuous control — 2026-11-14
+
+За прямим дорученням користувача змінити стратегію для підвищення якості,
+наступний головний експеримент — **YOLO11s COCO на 1280 px**, один фіксований
+курс на всіх 24,201 train frames із повною незалежною official val. Це інша
+архітектура, а не новий одноепоховий VFL/LR trial від c1. Джерело нового YOLO —
+офіційні COCO weights; не брати довільні VisDrone-trained weights із невідомим
+перетином із competition val/test. RT-DETR c1 і його public 0.2021478454
+зберігаються як контроль. Baseline 0.2216324580 і ціль 0.28+ не досягнуті.
+
+У коді підготовлено `scripts/start_yolo_training.py`, optional extra `[yolo]`,
+streamed conversion із symlinks замість копіювання архіву, training-only mask
+ignored regions зі збереженням positives, stock Ultralytics optimization/EMA,
+full common COCO100/500 validation серіалізованих ваг після кожної епохи.
+При `--export-every 2` проміжний common-best CSV формується кожні дві епохи;
+однакові hashes не переекспортуються. `QUALITY_REVIEW_REQUIRED` не означає
+promotion, Kaggle submission або public gain. Потрібне повне порівняння з c1,
+class/family діагностика й структурна перевірка. Автоматичного submit немає.
+
+Виявлена помилка попереднього allocation: batch-2 retry покращив native AP
+0.1822→0.1917, проте class/family promotion gate завершив навчання після першої
+епохи. Новий continuous policy не обриває курс за одним таким діагнозом:
+зберігає той самий optimizer/scheduler і last.pt, чекає кількох validation checks
+без прогресу; фінальні promotion gates не прибрано. Для RT-DETR наявний strict
+plan переходить лише явно через `--training-policy continuous`; його LR,
+batch, кількість запланованих epochs і deadline при цьому не змінюються.
+
+**Локальному агенту:** перевір фактичні процеси, service, storage і стан
+`c1_lrhalf_fulltrain`; Git не є live-з'єднанням. Якщо healthy epoch працює,
+дочекайся збереженої межі та повної val. Для пріоритету YOLO створи intentional
+STOP у selection run до початку наступної епохи, збережи checkpoint і не
+перезапускай fallback trials. CPU-only `--prepare-only` можна виконати паралельно.
+Далі встанови optional backend у чинний CUDA venv і запусти курс за
+[точними командами](yolo_strategy.md) під shared GPU lease та sleep inhibition.
+Не запускай обидва GPU jobs одночасно; не вбивай активний процес заради оновлення.
+На старті виміряй фактичні frames/s, RAM/VRAM, після першої повної епохи — AP;
+перший low AP після зміни 80→8 classes не є автоматичною причиною reset.
+
+Перевірено тут на CPU: реальні stock forward/backward, збереження optimizer,
+resume наступної епохи без зміни recipe, common validation, ignored masking,
+class mapping і CSV. GPU throughput/AP та новий Kaggle score не виміряні.
+Інструкції: [YOLO strategy](yolo_strategy.md),
+[continuous RT-DETR](continuous_training.md). Після запуску додай датовану
+відповідь із фактичними вимірюваннями та станом, без приватних mount paths.
