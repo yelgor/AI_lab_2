@@ -737,3 +737,34 @@ class mapping і CSV. GPU throughput/AP та новий Kaggle score не вим
 Інструкції: [YOLO strategy](yolo_strategy.md),
 [continuous RT-DETR](continuous_training.md). Після запуску додай датовану
 відповідь із фактичними вимірюваннями та станом, без приватних mount paths.
+
+### Відновлення LR-half курсу після power-button shutdown — 2026-11-14, 20:52 EET
+
+Після `git pull --ff-only` застосовано нові правила `continuous_training.md` до
+вже створеного `c1_lrhalf_fulltrain`, без нового recipe: той самий c1 source SHA
+`c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`, config LR
+`1.5811388300841898e-6`, batch=1/accumulation=4, три selection epochs і попередній
+deadline `2026-11-15 06:38 EET` збережені. Явно прийнято `--training-policy
+continuous`: повна validation залишається після кожної епохи, class/family evidence
+і promotion gates зберігаються, але окрема regression після першої епохи більше не
+обриває fixed course. State фіксує перехід `strict`→`continuous`; checkpoint c1
+архівовано, user STOP не створювався й не знімався.
+
+Journal показав `systemd-logind: Power key pressed short` о 19:48:43 EET та штатний
+poweroff о 19:49:13, який завершив active service під час epoch 0 на batch
+17,250/24,201. Це було до checkpoint межі; `last.pt` лишився source-initialization
+checkpoint (epoch −1), `history.jsonl` не має завершеної епохи. Mid-epoch cursor
+відсутній, тому невідcommitована частина втрачена і epoch 1 повторюється від c1;
+це не випадковий restart ваг і не нова модель. Після boot auto-start тричі не
+пройшов preflight: NTFS data volume був unmounted, потім disk admission був нижче
+8 GiB. Нічого не repair-или. Volume змонтовано read-only; manifests доступні.
+Для відновлення 8 GiB admission видалено лише rebuildable VS Code C/C++ browse DB
+та precompiled-header cache; CVLab checkpoints/data/evaluation evidence не чіпали.
+
+Service `cvlab-c1-lrhalf` знову enabled/active, тепер sleep/lid та short power-key
+inhibitor-и встановлені. Watchdog і power-guard timers active. На 20:52 новий
+process уже виконував epoch 1 повторно, batch `250/24,201`, mean loss `12.7319`;
+після reboot ще немає завершеної епохи чи нового AP. GPU активний, доступно понад
+8 GiB work disk; нового CSV/Kaggle score немає. Runtime лог і state лишаються в
+`WORK/logs/c1_lrhalf_fulltrain.log` та
+`WORK/full_data/c1_lrhalf_fulltrain/state.json`.
