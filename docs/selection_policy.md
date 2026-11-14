@@ -81,3 +81,15 @@ the default plan. If any such plan has recorded status, it monitors live work
 but pauses legacy efficient-search fallback when idle. Its old a7-based recipe
 must not start silently after c1 full-data selection finishes or rejects a run.
 The local agent must use the dedicated approved-plan service to resume c1 work.
+
+## RT-DETR loss-coefficient ablations
+
+New full-data warm-start plans may explicitly override only RT-DETR matcher or
+loss coefficients (`matcher_*_cost`, `weight_loss_*`). The warm-start guard
+still requires identical detector topology and tensor shapes; the override is
+applied to the criterion configuration while learned weights and compatible
+optimizer/scaler/RNG state are restored. Store the exact coefficients in the
+plan state/config, use a new immutable plan name, and compare on the same full
+official validation with the class/family gates above. A coefficient change is
+an experiment, not evidence of improvement; rejected plans must not feed a
+final train+validation fit or CSV export.
