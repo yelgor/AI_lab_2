@@ -71,9 +71,23 @@ def joint_manifest(prepared, destination):
     return {"frames": count, "source_counts": counts, "sha256": actual_sha}
 
 
-def recipe(source_config, output, *, epochs, final=False, manifest=None, report=None, batch_size=1):
+def recipe(source_config, output, *, epochs, final=False, manifest=None, report=None,
+           batch_size=1, model_overrides=None):
     config = copy.deepcopy(source_config)
     config["output"] = str(output)
+    model_overrides = model_overrides or {}
+    allowed_overrides = {
+        "matcher_class_cost", "matcher_bbox_cost", "matcher_giou_cost",
+        "weight_loss_vfl", "weight_loss_bbox", "weight_loss_giou",
+    }
+    if set(model_overrides) - allowed_overrides:
+        raise ValueError(f"Unsupported model training coefficient(s): {sorted(set(model_overrides) - allowed_overrides)}")
+    if model_overrides and config["model"].get("name") != "rtdetr":
+        raise ValueError("RT-DETR training coefficient overrides require an RT-DETR source")
+    for key, value in model_overrides.items():
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be a positive finite coefficient")
+        config["model"][key] = value
     config["data"].update(split="official", frame_step=1)
     for key in ("folds_file", "training_manifest"):
         config["data"].pop(key, None)
@@ -170,7 +184,7 @@ def full_epochs(config, source, count, deadline):
 
 
 def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
-        plan_name="default", batch_size=1):
+        plan_name="default", batch_size=1, model_overrides=None):
     from .efficient_search import _score, full_config
     from .engine import load_trained, setup
     from .prepare import select_records
@@ -189,16 +203,20 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     source = source_run / "best.pt"
     source_sha = sha256(source)
     require_training_source(source_sha)
+    model_overrides = model_overrides or {}
     state = read_json(state_path) if state_path.exists() else {
         "source_sha256": source_sha, "deadline": time.time() + hours * 3600,
         "selection_epochs": selection_epochs, "final_epochs": final_epochs,
         "batch_size": batch_size,
+        "model_overrides": model_overrides,
         "target_public_score": 0.28,
     }
     if state["source_sha256"] != source_sha:
         raise ValueError("Full-data source changed")
     if state.get("batch_size", 1) != batch_size:
         raise ValueError("Physical batch changed; use a new plan, preserving the existing run")
+    if state.get("model_overrides", {}) != model_overrides:
+        raise ValueError("Model coefficients changed; use a new plan, preserving the existing run")
     if state.get("finished"):
         return state
     base = read_json(source_run / "config.json")
@@ -207,7 +225,8 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     state["data"] = counts
     selection = (work / "runs/rtdetr_full_train_selection" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_train_selection")
-    config = recipe(base, selection, epochs=state["selection_epochs"], batch_size=batch_size)
+    config = recipe(base, selection, epochs=state["selection_epochs"], batch_size=batch_size,
+                    model_overrides=model_overrides)
     config["evaluation"]["cache_directory"] = str(work / "evaluation_cache")
     state["status"] = "full_train_selection"
     write_json(state_path, state)
@@ -282,7 +301,8 @@ def run(work, source_run, *, hours=8, selection_epochs=2, final_epochs=1,
     final_run = (work / "runs/rtdetr_full_data_final" if plan_name == "default"
                  else work / "runs" / f"rtdetr_{plan_name}_final")
     final_config = recipe(base, final_run, epochs=state["final_epochs"], final=True,
-                          manifest=combined, report=report_path, batch_size=batch_size)
+                          manifest=combined, report=report_path, batch_size=batch_size,
+                          model_overrides=model_overrides)
     state.update(status="full_data_final_fit", joint_manifest=joint,
                  selection_report_sha256=sha256(report_path))
     write_json(state_path, state)
