@@ -768,3 +768,21 @@ process уже виконував epoch 1 повторно, batch `250/24,201`, 
 8 GiB work disk; нового CSV/Kaggle score немає. Runtime лог і state лишаються в
 `WORK/logs/c1_lrhalf_fulltrain.log` та
 `WORK/full_data/c1_lrhalf_fulltrain/state.json`.
+
+### Continuous c1 LR-half: epoch 1 validation and epoch 2 training — 2026-11-14, 23:53 EET
+
+У resumed continuous plan завершився повний перший train epoch після перезапуску:
+24,201 frames, mean loss `12.40237`, pipeline `4.6541` frames/s (5,199.9 s).
+Повна native official validation на 2,846 frames дала mAP `0.19109594` проти
+початкових `0.18221211` (gain `+0.00888383`, локальна метрика, не Kaggle score).
+Робастний promotion decision позначив class/family regression; позитивні лише
+4/7 сімейств, bootstrap lower `−0.008386`, однак згідно з adopted continuous
+policy це діагностика, не зупинка курсу. Public-best c1 не змінюється.
+
+Друга повна train epoch також завершена: log loss `12.2018`; на 23:53 виконується
+її повна validation. State лишається `full_train_selection`, policy `continuous`,
+checkpoint boundary збережений, service/watchdog/power-guard active. План ще має
+до трьох selection epochs; final promotion gates, tiled confirmation і train+val
+fit не пройдені/не запускались. CSV немає. Поточний log/state:
+`WORK/logs/c1_lrhalf_fulltrain.log`,
+`WORK/full_data/c1_lrhalf_fulltrain/state.json`.
