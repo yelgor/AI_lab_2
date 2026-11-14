@@ -802,3 +802,23 @@ policy курс не обривається на цьому gate. На 00:55 epo
 ще не завершено. Service, watchdog і power-guard active; CSV та новий Kaggle score
 відсутні. Runtime details у `WORK/logs/c1_lrhalf_fulltrain.log` і
 `WORK/full_data/c1_lrhalf_fulltrain/state.json`.
+
+### Continuous c1 LR-half: third epoch complete — 2026-11-15, 01:39 EET
+
+Третій/останній predeclared selection epoch завершився на всіх 24,201 train frames:
+loss `12.1392499`, training pipeline `4.3998` frames/s (5,500.4 s). Native
+mAP на всіх 2,846 official-val кадрах — `0.19759198`, pooled gain `+0.01537987`
+від c1 baseline `0.18221211`. Candidate `best.pt` SHA256
+`7f910f3517e948c5784063136d90f1f6134a5a6bc39968f73a6235f6772645b5`;
+`last.pt` SHA256 `8aa28789ac98f4c43efdf840be36bfb52420c198cd2ee943e161910bf2282b09`.
+
+Навчальний selection gate має `class_regression`, `family_lower_bound_not_positive`,
+`too_few_improving_families`, `family_regression`: позитивні 4/7 сімейств,
+family bootstrap lower `−0.001965`. Continuous policy дозволив завершити три
+епохи; AP приростав `0.19109594`→`0.19618139`→`0.19759198`, але це локальний
+native результат, не public Kaggle. Після epoch 3, о 01:38, почалась окрема full
+native confirmation (`CONFIRM native`, 2,846 кадрів) перед остаточним promotion
+рішенням. На час запису confirmation ще працює; tiled gate, train+val final fit,
+CSV та новий Kaggle score відсутні. Source c1 SHA збережений. Service і періодичний
+watchdog активні. Цю перевірку опубліковано окремою гілкою
+`experiment/c1-lrhalf-continuous`, відгалуженою від поточного `main`.
