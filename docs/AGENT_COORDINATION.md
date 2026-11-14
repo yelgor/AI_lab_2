@@ -646,3 +646,28 @@ Selection відхилив epoch: `class_regression`, `family_lower_bound_not_po
 Після зупинки попереднього recipe створено окремий source-bound план `c1_vfl15_fulltrain` від незмінного c1 SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`. Змінено один параметр loss: RT-DETR `weight_loss_vfl` 1.0→1.5; matcher, bbox/GIoU coefficients, LR `3.1622776601683796e-6` та архітектура лишаються як у source. Warm-start зберігає сумісні optimizer/scaler/RNG. План має два повні selection epochs (24,201 кадрів кожен), batch=1/accumulation=4, повну незалежну official validation на 2,846 кадрах із сімома невиданими сімействами та робастні class/family gates. Лише після їх проходження дозволено один final-fit epoch на всіх 27,047 розмічених train+val кадрах; seen validation тоді не буде незалежною оцінкою. Дані прочитані з доступного read-only NTFS mount; checkpoint-и пишуться у локальний Linux work storage.
 
 CUDA preflight успішний; service `cvlab-c1-vfl15` enabled/active із sleep inhibition, watchdog і power-guard timers active. На 16:29 процес завантажив c1 і рахує повний baseline validation перед оновленнями ваг. Навчальний batch ще не почався, тому AP/loss gain, прийняття recipe і CSV поки не підтверджені. Дивитися `WORK/logs/c1_vfl15_fulltrain.log` та `WORK/full_data/c1_vfl15_fulltrain/state.json`. Результат попереднього batch-2 recipe лишається відхиленим і не використовується як initialization.
+
+### Результат c1 VFL coefficient experiment — 2026-11-14, 18:28 EET
+
+`c1_vfl15_fulltrain` завершив один повний selection epoch: усі 24,201 train frames,
+6,051 optimizer-update boundaries, training loss `15.3078`, pipeline `4.04` frames/s
+(5,990 s). Початковий native baseline на повній official val (2,846 frames) був
+`0.1822121`; кандидат із `weight_loss_vfl=1.5` отримав `0.1891387`, pooled gain
+`+0.0069266`. AP50 gain `+0.01440`, AP75 `+0.00502`, AP_small `+0.01519`. Це локальні
+COCO metrics, не Kaggle score.
+
+Кандидат відхилений: `class_regression`, `family_lower_bound_not_positive`,
+`too_few_improving_families`, `family_regression`, `gain_depends_on_one_family`.
+Позитивні 4/7 сімейств; equal-family bootstrap lower bound `−0.010556`,
+leave-one-family-out minimum `−0.003765`. Class AP deltas: person `−0.00457`,
+bicycle `−0.00934`, car `−0.01213`, van `+0.00071`, truck `+0.04107`,
+tricycle `+0.00011`, bus `+0.04696`, motor `−0.00739`. Source c1 лишився
+незмінним (SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`).
+Candidate `last.pt` SHA256:
+`00a4a9e0fc6b340304714f1b6d8601468dab069805b2fbee8bf9da83b29bade9`;
+source-best receipt `best.pt` SHA256:
+`e301d659fcd1bf3222fa797d468ece105e98dd9e2703ec66fdac820e35e1d742`.
+Plan status `selection_halted`; second epoch, tiled gate, final train+val та CSV
+не запускались. Service `cvlab-c1-vfl15` disabled/inactive, CUDA idle; periodic
+watchdog та power-guard timers active. Disk admission margin близький до мінімуму.
+Kaggle score не змінювався; CSV не готовий.
