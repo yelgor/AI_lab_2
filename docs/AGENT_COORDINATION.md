@@ -671,3 +671,24 @@ Plan status `selection_halted`; second epoch, tiled gate, final train+val та C
 не запускались. Service `cvlab-c1-vfl15` disabled/inactive, CUDA idle; periodic
 watchdog та power-guard timers active. Disk admission margin близький до мінімуму.
 Kaggle score не змінювався; CSV не готовий.
+
+### Наступний source-bound запуск від c1 з нижчою LR — 2026-11-14, 18:38 EET
+
+Попередній `c1_vfl15_fulltrain` зупинено robust selection після epoch 0; його
+checkpoint не використовується як source, halt збережено, service вимкнено.
+Створено новий окремий `c1_lrhalf_fulltrain` plan від public-best c1 з тим самим
+повним SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`;
+`source_c1_lrhalf/best.pt` є посиланням на незмінний checkpoint. Єдина зміна проти
+c1-рецепта — LR знижено удвічі з `3.1622776601683796e-6` до
+`1.5811388300841898e-6`; VFL повернуто до source значення 1.0. Batch=1,
+accumulation=4, три повні selection epochs по 24,201 кадру максимум; кожна має
+повну official validation із 2,846 кадрів і ті самі class/family gates. Один
+final train+val epoch на 27,047 мітках можливий лише після успішного відбору.
+
+На 18:38 preflight пройшов, `cvlab-c1-lrhalf` active із sleep inhibition,
+CUDA/data manifests доступні, runtime state `full_train_selection`; завантажено c1
+і розпочато початкову validation. Train batches та оцінка цього recipe ще не
+підтверджені. Watchdog та power-guard timers active; service має bounded 12h
+budget. Вільне Linux work storage невелике, тому перевіряти його протягом запуску.
+Runtime: `WORK/logs/c1_lrhalf_fulltrain.log`,
+`WORK/full_data/c1_lrhalf_fulltrain/state.json`.
