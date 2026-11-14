@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--final-epochs", type=int, default=1)
     parser.add_argument("--plan-name", default="default")
     parser.add_argument("--batch-size", type=int, default=1, help="Measured physical batch; keeps effective batch and requires a new plan when changed")
+    parser.add_argument("--weight-loss-vfl", type=float, help="RT-DETR classification/VFL loss coefficient; requires a new plan")
     args = parser.parse_args()
     work = args.work.resolve()
     with (work / ".full_data.launcher.lock").open("a") as own:
@@ -35,9 +36,12 @@ def main():
             os.environ.pop("CVLAB_DATA_ROOT", None)
             from cvlab.full_data import run
 
+            model_overrides = ({"weight_loss_vfl": args.weight_loss_vfl}
+                               if args.weight_loss_vfl is not None else {})
             run(work, args.source, hours=args.hours,
                 selection_epochs=args.selection_epochs, final_epochs=args.final_epochs,
-                plan_name=args.plan_name, batch_size=args.batch_size)
+                plan_name=args.plan_name, batch_size=args.batch_size,
+                model_overrides=model_overrides)
 
 
 if __name__ == "__main__":
