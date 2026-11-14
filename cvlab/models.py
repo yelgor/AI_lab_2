@@ -202,12 +202,26 @@ class QueryDetector(nn.Module):
             "anchor_image_size": None,
             "disable_custom_kernels": True,
         }
-        for key in ("matcher_class_cost", "matcher_bbox_cost", "matcher_giou_cost"):
+        training_coefficients = (
+            "matcher_class_cost",
+            "matcher_bbox_cost",
+            "matcher_giou_cost",
+            "weight_loss_vfl",
+            "weight_loss_bbox",
+            "weight_loss_giou",
+        )
+        for key in training_coefficients:
             if key in config:
                 kwargs[key] = config[key]
         if metadata:
+            hf_config = dict(metadata["hf_config"])
+            # Keep learned topology/weights while allowing a controlled loss
+            # coefficient ablation from a compatible warm-start checkpoint.
+            for key in training_coefficients:
+                if key in config:
+                    hf_config[key] = config[key]
             self.core = RTDetrForObjectDetection(
-                RTDetrConfig.from_dict(metadata["hf_config"])
+                RTDetrConfig.from_dict(hf_config)
             )
             self.processor = RTDetrImageProcessor.from_dict(metadata["processor"])
         elif config.get("pretrained", True):
