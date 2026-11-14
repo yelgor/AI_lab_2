@@ -786,3 +786,19 @@ checkpoint boundary збережений, service/watchdog/power-guard active. �
 fit не пройдені/не запускались. CSV немає. Поточний log/state:
 `WORK/logs/c1_lrhalf_fulltrain.log`,
 `WORK/full_data/c1_lrhalf_fulltrain/state.json`.
+
+### Continuous c1 LR-half: epoch 2 result — 2026-11-15, 00:55 EET
+
+Другий completed epoch у fixed continuous course: усі 24,201 train frames, loss
+`12.21188`, pipeline `4.7107` frames/s (5,137.4 s). Full official native validation
+(2,846 frames) дала mAP `0.19618139`, gain `+0.01396928` проти c1 baseline
+`0.18221211`; це локальний AP, не Kaggle. Відносно попереднього epoch local mAP
+підріс з `0.19109594`; loss зменшився з `12.40237` до `12.21188`.
+
+Class/family promotion gate знову не прийняв кандидата: positive families `4/7`,
+family-bootstrap lower `−0.003531`, class/family regression. За новим continuous
+policy курс не обривається на цьому gate. На 00:55 epoch 2 (третя selection epoch)
+активна, batch `15,250/24,201`, cumulative `mean_loss=12.1959`; повну validation
+ще не завершено. Service, watchdog і power-guard active; CSV та новий Kaggle score
+відсутні. Runtime details у `WORK/logs/c1_lrhalf_fulltrain.log` і
+`WORK/full_data/c1_lrhalf_fulltrain/state.json`.
