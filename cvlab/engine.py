@@ -343,10 +343,22 @@ def train(
             raise ValueError("Final-fit source differs from the selected checkpoint")
         if checkpoint["config"]["model"]["name"] != config["model"]["name"]:
             raise ValueError("Initialization must use the same detector family")
-        if checkpoint["config"]["model"] != config["model"]:
-            raise ValueError(
-                "Warm initialization keeps model configuration unchanged; vary data/train settings"
-            )
+        source_model = checkpoint["config"]["model"]
+        target_model = config["model"]
+        if source_model != target_model:
+            # RT-DETR loss/matching coefficients affect the training criterion,
+            # not parameter shapes. Permit these as explicit, recorded warm-start
+            # ablations while keeping every architectural setting identical.
+            mutable_rtdetr_coefficients = {
+                "matcher_class_cost", "matcher_bbox_cost", "matcher_giou_cost",
+                "weight_loss_vfl", "weight_loss_bbox", "weight_loss_giou",
+            }
+            if source_model.get("name") != "rtdetr" or target_model.get("name") != "rtdetr":
+                raise ValueError("Warm initialization keeps model configuration unchanged")
+            source_arch = {k: v for k, v in source_model.items() if k not in mutable_rtdetr_coefficients}
+            target_arch = {k: v for k, v in target_model.items() if k not in mutable_rtdetr_coefficients}
+            if source_arch != target_arch:
+                raise ValueError("Warm initialization changed RT-DETR architecture, not only loss coefficients")
         if "seen_training_sequences" in checkpoint:
             seen_sequences = set(checkpoint["seen_training_sequences"])
         else:
@@ -837,7 +849,22 @@ def load_trained(checkpoint_path, config, device):
     requested_architecture = {
         k: v for k, v in config["model"].items() if k not in inference_only
     }
+    training_coefficients = {
+        "matcher_class_cost", "matcher_bbox_cost", "matcher_giou_cost",
+        "weight_loss_vfl", "weight_loss_bbox", "weight_loss_giou",
+    }
     if trained_architecture != requested_architecture:
+        source_for_compare = {
+            k: v for k, v in trained_architecture.items() if k not in training_coefficients
+        }
+        requested_for_compare = {
+            k: v for k, v in requested_architecture.items() if k not in training_coefficients
+        }
+    else:
+        source_for_compare = requested_for_compare = None
+    if (trained_architecture != requested_architecture
+            and (source_for_compare != requested_for_compare
+                 or checkpoint["config"]["model"].get("name") != "rtdetr")):
         raise ValueError("Model configuration differs from checkpoint")
     construction = dict(config["model"])
     model = build_model(
