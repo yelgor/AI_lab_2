@@ -1072,3 +1072,35 @@ optimizer/scaler numeric diagnostics скінченні, пропущених op
 `3,203/8,188 MiB`, available RAM `6,794 MiB`, swap free `4,095 MiB`, work disk
 `4.11 GiB`. Champion CSV та обидві frozen model SHA повторно звірені; без змін.
 Перший двоепоховий native+flip A/B ще очікується; Kaggle score не заявляється.
+
+## Перша двоепохова full native+flip перевірка FP32-продовження — 2026-11-15
+
+Кандидат після epoch 2, checkpoint SHA
+`0a6f3fc83e88440aba692967dab0678019ba3f13eff2d4c3f6e52691c3ea0859`, перевірений
+на всіх `2,846` official-val записах тим самим 1280 native+horizontal-flip
+pipeline; c1 val cache повторно використано. Report:
+`ensemble/yolo_fp32_candidates/0a6f3fc83e88440aba692967dab0678019ba3f13eff2d4c3f6e52691c3ea0859/comparison_vs_scored_champion.json`, SHA256
+`29f2c35cd52acf6904cf1521f5d7d8e3fc7b378cf78b1ef4a33856f43952ab6b`.
+CPU comparison took `729.23 s`; test views were not needed and no CSV was created.
+
+Незмінний scored flip-route baseline: COCO100 mAP `0.21662236`, COCO500
+`0.21752005`, APsmall `0.13517001`.
+
+| Candidate route | COCO100 mAP / gain | COCO500 mAP | APsmall / gain | Decision |
+|---|---:|---:|---:|---|
+| truck/bus from c1 | `0.20976481 / -0.00685755` | `0.21062529` | `0.13967286 / +0.00450285` | reject |
+| all YOLO | `0.20334418 / -0.01327818` | `0.20417999` | `0.13052042 / -0.00464960` | reject |
+
+Обидва маршрути мають тільки 2/7 позитивних family gains і pooled gain нижче
+нуля. Для c1 route найбільші class просідання: van `-0.064558`, car `-0.024052`;
+all-YOLO додатково просідає на truck `-0.057329`; збережені сімейні дельти та
+bootstrap у report. Пороги promotion/manual-review не пройдені. Public-best
+Kaggle `0.2237335225` і його CSV лишились незмінними; local AP не є Kaggle score.
+
+Через 4 GiB guard flip cache job спочатку не стартував; повторно використано
+native view, звільнено місце штатним очищенням лише npm package cache, після чого
+flip inference і порівняння завершились. Тренування відновилось із `resume_fp32.pt`,
+без повтору епох 1–2. На 22:19 локально активний segment, epoch 3 — `1,047/24,201`
+batches, `12.9 batch/s`; GPU `89%`, VRAM `2,809/8,188 MiB`, available RAM
+`6,155 MiB`, swap free `3,714 MiB`, disk free `4.42 GiB`; numeric failure немає.
+Controller очікує повного epoch 4 для наступного A/B.
