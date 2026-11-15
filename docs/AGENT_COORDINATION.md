@@ -848,3 +848,37 @@ COCO100 per-class AP: person `0.26828`, bicycle `0.18573`, car `0.40972`, van `0
 The two-epoch export completed. Local structural validation reports `valid=true`, exactly 3,811 test IDs in template order, 1,374,267 detections, no empty predictions, and metadata bound to the selected checkpoint. Review status is `QUALITY_REVIEW_REQUIRED`; reference comparison and public score remain unset. The CSV/weights/metadata are local and were not committed or submitted. Course continues with the same recipe; epoch 3 is active. Watchdog reports monitor, power/sleep inhibition remains active, and c1 public-best `0.2021478454` is unchanged.
 
 Застосовано `paired-family-class-v1` до epoch 2 проти c1 на тих самих 2,846 official-val records: pooled gain `+0.007555`, AP_small gain `+0.047224`, але candidate відхилений для promotion/export readiness через `class_regression`, `family_lower_bound_not_positive`, `too_few_improving_families`, `family_regression`, `gain_depends_on_one_family`. Family bootstrap 90% lower `−0.021572`, positive families `4/7`, leave-one-family-out minimum `−0.008267`. CSV лишається тільки `QUALITY_REVIEW_REQUIRED` попри валідну структуру; курс не зупинено й продовжується тим самим recipe.
+
+### Наступний вимір до baseline: фіксований YOLO+c1 route — 2026-11-15
+
+За прямим дорученням користувача працювати над перевищенням baseline додано
+`scripts/class_ensemble.py` і [точний порядок виконання](baseline_next.md).
+Гіпотеза одна: YOLO для person/bicycle/car/van/tricycle/motor, незмінний c1
+для truck/bus. Дефіцити цих двох класів у записаній epoch 2 відповідають близько
+0.01187 macro-AP, але фактичний ансамбль ще не виміряний; це не прогноз Kaggle.
+Усі ваги зберігаються; нового навчання або зміни чинного YOLO recipe немає.
+
+Локальному агенту: спочатку звір найсвіжішу повну YOLO val. Якщо новіший single
+вже має готовий належно перевірений кандидат — повідом його одразу. Інакше на
+найближчій збереженій межі тимчасово передай GPU двом frozen val-cache jobs:
+canonical c1 із його 960 global+tiled pipeline та current validated YOLO best
+1280 global. Використовуй нормальний STOP-boundary, не kill/freeze посеред епохи.
+Після кешування продовж той самий YOLO course; CPU compare може працювати
+паралельно, якщо є RAM. Не чекай завершення всіх 20 епох, щоб отримати перший
+контрольований результат комбінації. Історію RT-DETR лишити без автоперезапуску.
+
+Повна comparison вимірює обидва singles і route на всіх official-val records,
+COCO100/500, class/family AP; готові prediction/metric caches повторно
+використовуються. Strict promotion не послаблено. Окремий явний `--manual-review`
+дозволяє лише підготовку CSV за pooled gain >=0.001 проти обох моделей,
+class/size/evidence/minimum-family guards, із відкритими family warnings.
+Class/size regression або недостатній gain не обходяться цим прапорцем.
+Нічого не подається на Kaggle автоматично.
+
+Лише після eligible full-val result витрачай GPU на два test-cache jobs із
+тими самими frozen SHAs, потім CPU export/CSV validation та повідомлення
+користувачу. Не підмінюй frozen YOLO source новішим live best під час test.
+Додай фактичні повні метрики, timings, SHAs і CSV path/hash у відповідь сюди.
+Перевірено 57 CPU tests суміжних компонентів, Ruff/compile/diff checks;
+actual ensemble AP/GPU cost/public score тут не виміряні. Public-best
+0.2021478454 і ціль >0.2216324580 залишаються незмінними.

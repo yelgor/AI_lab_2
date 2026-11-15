@@ -13,6 +13,12 @@ stop after one improving epoch solely because a promotion guard rejects it.
 The separate [YOLO11s challenger](yolo_strategy.md) uses full common validation
 and review-only exports; it does not claim automatic promotion from AP alone.
 
+Update 2026-11-15: the [fixed truck/bus route](baseline_next.md) has a separate
+explicit manual-review export. It requires >=0.001 pooled gain against both
+single pipelines and retains class/size/completeness/minimum-family guards;
+family uncertainty stays in the report. This does not relax strict automatic
+promotion for full-data/efficient/interpolation runs or authorize auto-submit.
+
 ## Acceptance
 
 Both native and fixed tiled full-validation comparisons must pass

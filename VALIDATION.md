@@ -231,3 +231,17 @@ The laptop still needs to measure YOLO11s/1280 throughput, peak VRAM/RAM and
 full held-out AP. No GPU speedup, baseline crossing or new Kaggle score is
 established by these checks. See [the strategy and commands](docs/yolo_strategy.md).
 
+## Fixed class ensemble — 2026-11-15
+
+Targeted suite: **57 passed** across class ensemble, watchdog, tiled inference
+and YOLO integration tests; Ruff, compile checks and diff whitespace checks pass.
+The six new tests cover immutable snapshot preservation, streamed inference/cache
+reuse without model setup, missing/reordered/corrupt frames, a real common-COCO
+comparison with complementary synthetic detections, repeated CPU-score reuse,
+correct truck/bus class routing, the global 500-box cap, exact test/val identity,
+refused changed route/weights, accepted CSV output and rejected export paths.
+Manual review retains pooled/class/size/evidence guards and exposes family warnings.
+
+These are CPU implementation checks. The actual c1+YOLO combination has not
+been evaluated on the laptop or Kaggle here. No baseline crossing is claimed.
+

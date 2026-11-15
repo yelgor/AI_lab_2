@@ -20,6 +20,11 @@
    Class/family promotion guards не є автоматичною причиною обривати continuous
    course після однієї епохи. Не запускати нові одноепохові VFL/LR trials замість
    фіксованого курсу. Дочекатися збереженої межі чинного процесу й зберегти c1.
+9. Наступний конкретний baseline experiment:
+   [YOLO + c1 за класами](docs/baseline_next.md). Збережені прогнози, повна val,
+   одна фіксована комбінація; чинний YOLO course не скидається. Окремий явний
+   manual-review export зберігає class/size/pooled guards та family warnings;
+   він не є automatic promotion або дозволом на Kaggle auto-submit.
 
 ## Режим спільної роботи
 
