@@ -52,8 +52,9 @@ Local agent, carry out this single predeclared test:
    exact val/test pipeline identity. Notify the user of a genuinely new candidate;
    nothing is submitted automatically.
 
-This handoff specifies the next experiment; a flip adapter/result is not yet
-implemented or measured by this documentation commit. The remaining public gap
-cannot be converted into a predicted validation gain or a guaranteed next score.
-Record measured timing, full metrics, cache identity and outcome in coordination
-notes. Students retain responsibility for their own academic report.
+The flip adapter and full A/B are now implemented and measured; see the latest
+dated result in [AGENT_COORDINATION.md](AGENT_COORDINATION.md). The route passed
+the local selection guard and has a new CSV for manual Kaggle review. Its Kaggle
+score remains unknown; local AP does not predict or guarantee the leaderboard.
+The original public-best CSV and frozen pair remain unchanged. Students retain
+responsibility for their own academic report.

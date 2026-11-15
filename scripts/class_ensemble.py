@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def require_ram():
-    memory = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+    memory = dict(
+        line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines()
+    )
     if int(memory["MemAvailable"].split()[0]) < 4 * 1024**2:
         raise RuntimeError("Need at least 4 GiB available RAM")
 
@@ -28,6 +30,12 @@ def main():
     cache.add_argument("--output", required=True, type=Path)
     cache.add_argument("--split", choices=["val", "test"], default="val")
     cache.add_argument(
+        "--view",
+        choices=["native", "horizontal_flip"],
+        default="native",
+        help="horizontal_flip caches only the missing mirrored YOLO view",
+    )
+    cache.add_argument(
         "--tile-side", type=int, help="Default: c1=960; YOLO=global only"
     )
     cache.add_argument("--device", choices=["cuda:0", "cpu"], default="cuda:0")
@@ -38,8 +46,28 @@ def main():
         item.add_argument("--output", required=True, type=Path)
         if command == "export":
             item.add_argument("--report", required=True, type=Path)
-            item.add_argument("--manual-review", action="store_true",
-                              help="Permit explicit family uncertainty after pooled/class/size guards pass against both singles; never submits")
+            item.add_argument(
+                "--manual-review",
+                action="store_true",
+                help="Permit explicit family uncertainty after pooled/class/size guards pass against both singles; never submits",
+            )
+    compare_flip_parser = sub.add_parser("compare-flip")
+    for name in ("c1", "yolo", "yolo-flip", "parent-report", "parent-csv", "output"):
+        compare_flip_parser.add_argument(f"--{name}", required=True, type=Path)
+    export_flip_parser = sub.add_parser("export-flip")
+    for name in (
+        "c1-val",
+        "yolo-val",
+        "yolo-flip-val",
+        "c1-test",
+        "yolo-test",
+        "yolo-flip-test",
+        "parent-report",
+        "report",
+        "output",
+    ):
+        export_flip_parser.add_argument(f"--{name}", required=True, type=Path)
+    export_flip_parser.add_argument("--manual-review", action="store_true")
     args = parser.parse_args()
     os.environ.pop("CVLAB_DATA_ROOT", None)
     if args.command != "cache":
@@ -52,13 +80,48 @@ def main():
         raise FileNotFoundError("Work volume is not mounted")
     config = copy.deepcopy(load_config(args.config))
     config["data"].update(split="official", frame_step=1)
+    if args.command in ("compare-flip", "export-flip"):
+        from cvlab.yolo_flip_experiment import compare_flip, export_flip
+
+        if args.command == "compare-flip":
+            import torch
+
+            require_ram()
+            torch.set_num_threads(1)
+            compare_flip(
+                args.c1,
+                args.yolo,
+                args.yolo_flip,
+                args.parent_report,
+                args.parent_csv,
+                config,
+                args.output,
+            )
+        else:
+            import torch
+
+            torch.set_num_threads(1)
+            export_flip(
+                args.c1_val,
+                args.yolo_val,
+                args.yolo_flip_val,
+                args.c1_test,
+                args.yolo_test,
+                args.yolo_flip_test,
+                args.parent_report,
+                args.report,
+                config,
+                args.output,
+                manual_review=args.manual_review,
+            )
+        return
     if args.command == "compare":
         import torch
 
         require_ram()
         torch.set_num_threads(1)
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.with_suffix(args.output.suffix+".lock").open("a") as lock:
+        with args.output.with_suffix(args.output.suffix + ".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             compare(args.c1, args.yolo, config, args.output)
         return
@@ -66,7 +129,14 @@ def main():
         import torch
 
         torch.set_num_threads(1)
-        export(args.c1, args.yolo, config, args.report, args.output, manual_review=args.manual_review)
+        export(
+            args.c1,
+            args.yolo,
+            config,
+            args.report,
+            args.output,
+            manual_review=args.manual_review,
+        )
         return
     tile = (
         args.tile_side
@@ -97,12 +167,15 @@ def main():
             args.split,
             tile,
             existing_only=True,
+            view=args.view,
         )
         is not None
     ):
         return
     if shutil.disk_usage(work).free < 4 * 2**30:
-        raise RuntimeError("Need 4 GiB disk headroom for snapshots and prediction caches")
+        raise RuntimeError(
+            "Need 4 GiB disk headroom for snapshots and prediction caches"
+        )
     # Snapshot best, never live last.pt (Ultralytics overwrites last in place).
     checkpoint = snapshot(args.checkpoint, work / "ensemble/snapshots")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -129,7 +202,13 @@ def main():
 
                 configure_optional_backend(work)
             cache_predictions(
-                checkpoint, config, args.output, args.backend, args.split, tile
+                checkpoint,
+                config,
+                args.output,
+                args.backend,
+                args.split,
+                tile,
+                view=args.view,
             )
 
 

@@ -22,8 +22,10 @@ C1_SHA = "c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4"
 ROUTE = {CLASSES.index(name) + 1 for name in ("truck", "bus")}
 CASES = ("c1", "yolo", "class_route")
 FAMILY_REVIEW_REASONS = {
-    "family_lower_bound_not_positive", "too_few_improving_families",
-    "family_regression", "gain_depends_on_one_family",
+    "family_lower_bound_not_positive",
+    "too_few_improving_families",
+    "family_regression",
+    "gain_depends_on_one_family",
 }
 
 
@@ -37,12 +39,16 @@ def review_eligible(decisions):
 
 
 def routing():
-    return {name: "c1" if i+1 in ROUTE else "yolo" for i, name in enumerate(CLASSES)}
+    return {name: "c1" if i + 1 in ROUTE else "yolo" for i, name in enumerate(CLASSES)}
 
 
 def evaluator_identity():
-    return digest([(name, (Path(__file__).parent / name).read_text())
-                   for name in ("metrics.py", "sequential_policy.py", "selection_policy.py")])
+    return digest(
+        [
+            (name, (Path(__file__).parent / name).read_text())
+            for name in ("metrics.py", "sequential_policy.py", "selection_policy.py")
+        ]
+    )
 
 
 def sha(path):
@@ -86,8 +92,12 @@ def snapshot(source, directory):
     return target
 
 
-def pipeline_identity(backend, config, options):
-    return {
+def pipeline_identity(backend, config, options, view="native"):
+    if view not in ("native", "horizontal_flip"):
+        raise ValueError("Unknown prediction view")
+    if view == "horizontal_flip" and backend != "yolo":
+        raise ValueError("Horizontal-flip view is implemented only for YOLO")
+    result = {
         "backend": backend,
         "model": config["model"],
         "runtime": config["runtime"],
@@ -118,6 +128,16 @@ def pipeline_identity(backend, config, options):
             )
         },
     }
+    if view == "horizontal_flip":
+        adapter = Path(__file__).parent / "yolo_flip.py"
+        result["tta"] = {
+            "adapter": "yolo-horizontal-flip-only-canvas-unflip-v1",
+            "adapter_sha256": hashlib.sha256(adapter.read_bytes()).hexdigest(),
+            "flip_axis": "tensor_width",
+            "box_unflip": "canvas_width_minus_x2_x1_before_restore",
+            "nms_iou": 0.6,
+        }
+    return result
 
 
 def metadata(directory):
@@ -177,6 +197,7 @@ def cache_predictions(
     tile_side=None,
     *,
     existing_only=False,
+    view="native",
 ):
     """GPU lease belongs to the caller; each checkpoint/cohort is inferred once."""
     import torch
@@ -185,6 +206,10 @@ def cache_predictions(
     checkpoint, directory = Path(checkpoint), Path(directory)
     if backend not in ("c1", "yolo"):
         raise ValueError("Backend must be c1 or yolo")
+    if view == "horizontal_flip" and backend != "yolo":
+        raise ValueError("Only YOLO can produce a horizontal-flip view")
+    if view not in ("native", "horizontal_flip"):
+        raise ValueError("Unknown prediction view")
     if backend == "c1" and sha(checkpoint) != C1_SHA:
         raise ValueError("Control must be the preserved public-best c1 checkpoint")
     records = records_for(config, split)
@@ -199,7 +224,7 @@ def cache_predictions(
         "checkpoint_sha256": sha(checkpoint),
         "data_fingerprint": digest(records),
         "training_fingerprint": digest(select_records(config, "train")),
-        "pipeline": pipeline_identity(backend, config, options),
+        "pipeline": pipeline_identity(backend, config, options, view),
         "split": split,
     }
     if (directory / "cache.json").exists():
@@ -219,6 +244,10 @@ def cache_predictions(
         from .yolo_backend import Predictor
 
         model = Predictor(YOLO(str(checkpoint)).model.to(device), config)
+        if view == "horizontal_flip":
+            from .yolo_flip import HorizontalFlipOnlyPredictor
+
+            model = HorizontalFlipOnlyPredictor(model)
     else:
         model = load_trained(checkpoint, config, device)
     temporary = directory / "frames.jsonl.gz.tmp"
@@ -237,7 +266,7 @@ def cache_predictions(
             )
             if count % 64 == 0 or count == len(records):
                 print(
-                    f"CACHE {backend} {split}={count}/{len(records)}; "
+                    f"CACHE {backend}{'_flip' if view == 'horizontal_flip' else ''} {split}={count}/{len(records)}; "
                     f"{count / max(time.perf_counter() - started, 1e-6):.2f} frames/s",
                     flush=True,
                 )
@@ -315,9 +344,17 @@ def compare(c1, yolo, config, output):
     }
     if Path(output).exists():
         prior = read_json(output)
-        for key in ("protocol", "data_fingerprint", "inputs", "route", "evaluator_identity"):
+        for key in (
+            "protocol",
+            "data_fingerprint",
+            "inputs",
+            "route",
+            "evaluator_identity",
+        ):
             if prior.get(key) != report[key]:
-                raise ValueError("Existing comparison has a different identity; preserve it and use a new report")
+                raise ValueError(
+                    "Existing comparison has a different identity; preserve it and use a new report"
+                )
         report = prior
     for case in CASES:
         if case in report["cases"]:
@@ -348,7 +385,9 @@ def compare(c1, yolo, config, output):
     report["status"] = (
         "FULL_VALIDATION_ACCEPTED"
         if report["accepted"]
-        else "FAMILY_UNCERTAINTY_MANUAL_REVIEW" if report["review_eligible"] else "REJECTED_KEEP_SINGLE_MODELS"
+        else "FAMILY_UNCERTAINTY_MANUAL_REVIEW"
+        if report["review_eligible"]
+        else "REJECTED_KEEP_SINGLE_MODELS"
     )
     write_json(output, report)
     return report
@@ -363,7 +402,9 @@ def export(c1, yolo, config, report_path, output, *, manual_review=False):
     report = read_json(report_path)
     if (
         report.get("protocol") != "fixed-truck-bus-route-v1"
-        or not (report.get("accepted") or manual_review and report.get("review_eligible"))
+        or not (
+            report.get("accepted") or manual_review and report.get("review_eligible")
+        )
         or set(report.get("decisions", {})) != {"c1", "yolo"}
     ):
         raise ValueError(
@@ -375,10 +416,16 @@ def export(c1, yolo, config, report_path, output, *, manual_review=False):
         )
         for case in ("c1", "yolo")
     }
-    if (actual != report["decisions"] or not (
-            all(d["accepted"] for d in actual.values()) or manual_review and review_eligible(actual))):
+    if actual != report["decisions"] or not (
+        all(d["accepted"] for d in actual.values())
+        or manual_review
+        and review_eligible(actual)
+    ):
         raise ValueError("Selection decisions do not match the recorded full metrics")
-    if report.get("route") != routing() or report.get("evaluator_identity") != evaluator_identity():
+    if (
+        report.get("route") != routing()
+        or report.get("evaluator_identity") != evaluator_identity()
+    ):
         raise ValueError("Routing/evaluator changed since full validation")
     validation = records_for(config, "val")
     if report["data_fingerprint"] != digest(validation) or report["records"] != len(
@@ -438,7 +485,9 @@ def export(c1, yolo, config, report_path, output, *, manual_review=False):
                     next(rows)
                     writer.writerow(next(rows))
     checked = validate_submission(
-        temporary, root / "test_images.csv", sample_path if sample_path.is_file() else None
+        temporary,
+        root / "test_images.csv",
+        sample_path if sample_path.is_file() else None,
     )
     if (
         not checked["valid"]

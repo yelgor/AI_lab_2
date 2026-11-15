@@ -960,3 +960,51 @@ interval `[-0.015933, 0.032703]`. Проти YOLO 6/7 позитивні, lower 
 `0.0`, хоча model/optimizer tensors скінченні; відновлений epoch-3 `last.pt`
 має скінченні model/EMA/optimizer і scaler `8192`. YOLO service лишається
 зупиненим, STOP збережений, нові updates не виконуються.
+
+### YOLO horizontal-flip A/B against the scored public-best route — 2026-11-15
+
+Збережений контроль `yolo_c1_pair_epoch_004.csv` і його SHA
+`1d4ac45ca8f1b121d40c65ddea376a498b845ab1249cd0f00063eb2f8ddf2562` не
+змінювалися. Frozen c1/YOLO inputs ті самі canonical SHAs із попереднього
+запису. Новий `HorizontalFlipOnlyPredictor` рахує тільки flip view; x-boxes
+віддзеркалюються у 1280 canvas перед geometry restore. Увесь prediction merge
+після inference працює на CPU: class-aware NMS IoU 0.6 і global cap 500.
+Native cache identity лишилась біт-в-біт сумісною; новий cache окремо позначає
+adapter, його SHA та flip transform. І c1 inference не повторювався.
+
+Flip-only YOLO inference: official val 2,846 кадрів за `199.54 s`
+(`14.26 frames/s`); test 3,811 за `134.32 s` (`28.37 frames/s`). A/B з
+точним parent comparison SHA `e66e9a6b6d7604dd3ae7ddaf799a2b0391fb22ccf92182303803e62eb4aff60f`
+і тим самим validation fingerprint завершив CPU metrics за `355.10 s`.
+
+Усі метрики — local COCO, не Kaggle score:
+
+| Route | COCO100 mAP / AP50 / AP75 / APsmall | COCO500 mAP / APsmall |
+|---|---:|---:|
+| Scored parent route | 0.202613 / 0.401829 / 0.180093 / 0.129118 | 0.203428 / 0.129623 |
+| YOLO native + flip route | 0.216622 / 0.425163 / 0.192607 / 0.135170 | 0.217520 / 0.135717 |
+
+Gain проти public-best route: COCO100 `+0.01400946`, COCO500 `+0.01409233`,
+APsmall `+0.00605210`. COCO100 per-class gains
+(person/bicycle/car/van/truck/tricycle/bus/motor):
+`+0.005644 / +0.025316 / +0.005922 / +0.053631 / 0 / +0.011949 / 0 / +0.009614`;
+усі class/size guards пройдені. Усі 7 held-out families покращились; їхні gains
+`+0.006448, +0.009223, +0.013677, +0.008264, +0.021656, +0.008318, +0.011516`;
+paired family-bootstrap 90% interval `+0.008621…+0.014662`. Статус local gate
+`accepted=true`; це не обіцяє Kaggle результат, а official val уже використовувався
+для відбору.
+
+Новий локальний CSV `yolo_c1_pair_epoch_004_fliptta.csv`, SHA256
+`2dee65d0f257ba61569d48ba94ad95e74e740802b7e430cf10556a1fe2ebdce0`.
+Незалежний submission checker підтвердив 3,811 IDs у template order, 1,624,942
+детекції, нуль порожніх кадрів, класи 0–7, координати в межах кадру, cap 500,
+`valid=true`, `matches_template_order=true`; metadata SHA збігається та зв’язує
+точні val/test cache identities. `manual_review=true`, `strict_promotion_accepted=true`,
+`public_score=null`. CSV не подавався автоматично. Поточний public-best лишається
+підтверджений parent `0.2176009680`; новий Kaggle score невідомий. Пошкоджений
+epoch-4 checkpoint не використовувався, YOLO STOP лишився на місці, навчання не
+відновлювалось.
+
+Цільові flip tests: `3 passed` (odd dimensions/asymmetric padding, tensor-space
+unflip before restore, same-class duplicate suppression, class preservation,
+500 cap і окрема cache identity). Ruff, `compileall` та `git diff --check` пройшли.
