@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 21730)
-Total output lines: 962
-
 # Спільний робочий контекст агентів
 
 Це журнал коротких завдань і відповідей між вебсеансом та локальним Codex.
@@ -488,7 +485,90 @@ deltas next. Do not overwrite source config/weights, clear a rejected plan's
 halt/STOP, infer public gain, or start a second concurrent training model.
 
 Validation for this change: final full suite 317 passed, 1 CUDA equivalence test
-skipped because no GP…1730 tokens truncated…емає. GPU був активно зайнятий, температура безпечна;
+skipped because no GPU is attached to the web executor. CPU tests verify exact
+reference/optimized parameter and AdamW-state equality, nonfinite-loss rejection
+before updates, accumulation tails, source-preserving real benchmark execution,
+physical-batch coverage and validation-batch/cache identities. Actual GPU frames/s
+and AP improvement remain unmeasured. Local benchmark results must supply them.
+
+### Локальна перевірка плану та benchmark throughput — 2026-11-12, 18:16 EET
+
+Виконано CPU artifact audit, власник GPU звірений безпосередньо. Новий alpha=.5
+процес не завершився: збережено лише повний native результат `0.1916993` проти
+source `0.1821884` (gain `+0.0095108`); процес зник до tiled gate, тому CSV немає
+і цей результат не приймається за selection. До цього стартував batch benchmark;
+два виправлення в `scripts/benchmark_training.py` (CUDA device index і копія
+adapter metadata на кожен repeat) опубліковані окремими commits.
+
+Завершений source-preserving benchmark використав checkpoint
+`c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`, effective
+batch 4, 20 optimizer-update boundaries на вимір і 2 repeats. Median pipeline
+throughput: batch1/accumulation4 `3.9981` frames/s з readback per minibatch;
+batch1/accumulation4 `4.0125` з readback per update (`+0.36%`); batch2/accumulation2
+`4.3627` per minibatch (`+9.12%`); batch2/accumulation2 `4.5668` per update
+(`+14.22%`) проти reference. Report позначає batch2/per-update як measured faster,
+але якість не вимірювалася. Source checkpoint перевірено тим самим SHA до/після;
+`models_saved=false`. Це пропонує окремий c1-initialized batch2 plan для robust
+class/family validation, але не дозволяє перемикати поточний plan або оголосити
+поліпшення AP/Kaggle. Loss `batch2` також відрізнявся від `batch1`; фізичний batch
+може міняти RT-DETR loss/denoising.
+
+Локальний JSON лишився у `WORK/benchmarks/training_20261112T161141_8e1c6551.json`;
+machine telemetry/checkpoint-и не комітяться. Перевірка після benchmark: активного
+training/evaluation процесу немає; `cvlab-full-data-c1` та sampling service inactive,
+watchdog active з pause marker, final-fit STOP лишився. Work data volume read-only;
+final train+val не запускався. Наступне рішення: зберігати c1 source й окремим
+plan наздогнати throughput batch2, але запускати лише з robust source-bound gates,
+збереженим STOP для final-fit і writable storage. OOF/public score не виводити з
+цього benchmark.
+
+
+### Локальний стан, аудит і failure diagnostics — 2026-11-12, 18:25 EET
+
+Перевірено безпосередньо на локальній машині: навчальних/validation-процесів
+немає; CUDA доступна, compute GPU вільний. User-служби `cvlab-watchdog.service`
+і `.timer` встановлені та активні; watchdog продовжує внутрішню перевірку раз
+на 60 с. Його поточний стан — `paused` через checkpoint-boundary STOP;
+збережено STOP для `rtdetr_c1_continuation_final` і `rtdetr_full_data_final`.
+Старий загальний часовий бюджет завершився 2026-11-11. Новий запуск не
+допускається політикою watchdog: runtime work має близько 7.25 GiB вільного
+місця при мінімумі 8 GiB. Підготовлений data volume досі read-only. Checkpoints
+не змінювалися й не видалялися.
+
+CPU audit `scripts/check_lab.py` для фактичного data work підтвердив
+`train/val/test/folds` під `prepared/`; окремий runtime audit очікувано не має
+копії `prepared/`. EDA summaries уже існують: train — 24,201 кадр / 1,105,516
+об'єктів, validation — 2,846 / 114,132; класи нерівномірні (validation bus —
+264 об'єкти, train bus — 9,653). Поточні локальні таблиці failure diagnostics
+для checkpoint `224c8cc6f9877a4cb4196c2ec514527964cf18c4f9a8d85031fc09cc234c8f9d`
+збережені в `WORK/diagnostics/c1_native_failure_audit/`: `class_counts_iou50_score025.csv`,
+`examples_by_error_and_class.csv`, `README.json`. Вони покривають усі 2,846
+validation кадрів і дають фіксований поріг score=0.25, IoU=0.5; це описова
+діагностика, не AP і не незалежна оцінка, бо ця cohort брала участь у відборі.
+Найбільші помилки за таблицею: motor має 5,346 wrong-class FP, van — 3,131,
+bicycle — 2,631; bus recall при цьому порозі 0.136. Є до трьох різних family
+прикладів на клас/тип помилки. Prediction cache — повний, 2,846 image IDs.
+
+Останній записаний tiled confirmation у watchdog/log — local mAP `0.198893`;
+це не Kaggle score. Не створено нового READY CSV і не подано нічого на Kaggle.
+Далі: звільнити місце до admission-порогу та відновити writable data/work
+storage; зберегти STOP до нового source-bound плану з class/family gates.
+Фінальний train+val лишається без незалежної validation-оцінки.
+
+
+### Новий c1 batch-2 selection — 2026-11-12, 19:25 EET
+
+Після виміряного GPU throughput запущено окремий `c1_batch2` plan від незмінного
+source SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`:
+24,201 train frames на кожен із двох повних selection epochs, physical batch=2,
+accumulation=2 (effective batch 4), full official validation і далі tiled
+source-bound gates. Фінальний `train+val` output має свій STOP, тож цей запуск
+його не починає. Раніше завершений `c1_continuation` і public-best артефакти
+залишені без змін.
+
+На 19:25 служба `cvlab-c1-batch2` активна, CUDA preflight і читання ваг/data
+пройшли. Йде full-validation baseline перед першою епохою; перших train batches,
+loss і measured FPS ще немає. GPU був активно зайнятий, температура безпечна;
 RAM доступна вище 4 GiB тренера, диск вище 8 GiB admission порогу. NTFS data
 volume лишається read-only, але модель читає його; робочі виходи — на writable
 Linux work. Watchdog перейшов у `monitor`; початковий quiet-process сигнал
