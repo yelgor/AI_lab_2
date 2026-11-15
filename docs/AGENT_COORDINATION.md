@@ -1057,3 +1057,18 @@ CUDA активна, numeric-failure receipt немає. Контролер пе
 і до трьох повторів невдалої перевірки; навчальний процес не переривався.
 Цільові champion/flip тести повторно пройшли: `6 passed`. Двоепоховий кандидат
 ще не готовий; останній вимір — проміжний статус, не результат якості.
+
+Перший повний epoch receipt — 2026-11-15 20:21 EET. Checkpoint SHA
+`2df8d040d51d328d3d0e02695c3aff3d0e968a43022b94a882de2311e9b95823`, всі
+`2,846` official-val кадрів. Native YOLO COCO100: mAP `0.19064544`, AP50
+`0.37886147`, AP75 `0.16705325`, APsmall `0.12696272`; COCO500 mAP
+`0.19140847`, APsmall `0.12739947`. Проти початкового native source checkpoint
+відповідно Δ COCO100 mAP `+0.00093380`, APsmall `+0.00713802`, COCO500 mAP
+`+0.00089172`. Це одно-модельна діагностика; порівняння з Kaggle champion route
+і flip ще не проводилось. Full-val pipeline для цього receipt: `131.16 s`,
+`21.70 images/s`; сам inference `69.11 images/s`. Усі batch/loss/model/EMA/
+optimizer/scaler numeric diagnostics скінченні, пропущених optimizer updates `0`.
+На 20:21 друга епоха `7,438/24,201`, `10.0 batch/s`; GPU `94%`, VRAM
+`3,203/8,188 MiB`, available RAM `6,794 MiB`, swap free `4,095 MiB`, work disk
+`4.11 GiB`. Champion CSV та обидві frozen model SHA повторно звірені; без змін.
+Перший двоепоховий native+flip A/B ще очікується; Kaggle score не заявляється.
