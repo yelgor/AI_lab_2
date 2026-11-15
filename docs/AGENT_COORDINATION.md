@@ -1008,3 +1008,41 @@ epoch-4 checkpoint не використовувався, YOLO STOP лишивс
 Цільові flip tests: `3 passed` (odd dimensions/asymmetric padding, tensor-space
 unflip before restore, same-class duplicate suppression, class preservation,
 500 cap і окрема cache identity). Ruff, `compileall` та `git diff --check` пройшли.
+
+## Стабільне FP32-продовження champion і перевірки кожні дві епохи — 2026-11-15
+
+**Статус: TRAINING.** Public-best `0.2237335225` збережений: контрольний CSV
+`yolo_c1_pair_epoch_004_fliptta.csv` має SHA256
+`2dee65d0f257ba61569d48ba94ad95e74e740802b7e430cf10556a1fe2ebdce0`; frozen
+c1 SHA `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4`,
+YOLO SHA `42e4c916c45a262d1e29863dc7edb919679528fa673241eef4641a25606285a8`.
+Пошкоджений epoch-4 лишається виключеним; новий run почався з frozen YOLO
+checkpoint, FP32, batch 1, AdamW LR `1e-4`, frozen BatchNorm, `imgsz=1280`,
+повний train manifest `24,201` кадрів; `2,846` official-val кадрів незалежні.
+Для нового рецепта optimizer навмисно свіжий; це не resume старих optimizer
+moments.
+
+Перевірена початкова full-val оцінка source checkpoint на тому самому cohort:
+COCO100 mAP `0.1897116407`, AP50 `0.3803219992`, AP75 `0.1640890306`,
+APsmall `0.1198247004`; COCO500 mAP `0.1905167524`, APsmall `0.1203154464`.
+Це початкова native-оцінка моделі, не новий ансамблевий кандидат і не Kaggle
+score. Навчання активне; повного epoch receipt ще немає. Shared GPU lease і
+sleep-inhibition активні. Дані змонтовані read-only; вихідні checkpoints пишуться
+у work-каталог. Під час першої епохи зафіксовано `1,550/24,201` batch при
+поточному темпі `7.7 batch/s`; рання оцінка часу до межі — близько 49 хвилин,
+не гарантований ETA. VRAM було `2,819/8,188 MiB`, GPU util `74%`, host RAM
+available `7.2 GiB`, swap usage близько `0.3 MiB`, вільно на output filesystem
+`4.5 GiB`. Контролер `yolo_tta_controller.py` очікує дві повні епохи,
+зупиняє тільки на збереженій межі, рахує native+horizontal-flip на повній val,
+порівнює з точним champion report/CSV, повторно використовує c1 cache та
+експортує лише кандидата, що пройшов class/size/family guards. Потім продовжує
+той самий 20-epoch course через FP32 recovery state. Test inference і Kaggle
+submission не запускаються для кандидата до проходження val gate; auto-submit
+вимкнений.
+
+Код generic champion comparison, перевірки parent/cohort/view identities і
+run-specific controller локально перевірено: `6 passed`, Ruff, compile та
+`git diff --check` пройшли. Перший кандидатний A/B ще не завершений; після двох
+епох його метрики/CSV буде записано окремо. Наступна дія — супроводжувати run,
+перевірити повний A/B і одразу повідомити локальні метрики та шлях CSV, якщо gate
+пройдено. Жодного нового public score цим записом не заявлено.

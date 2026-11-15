@@ -68,6 +68,34 @@ def main():
     ):
         export_flip_parser.add_argument(f"--{name}", required=True, type=Path)
     export_flip_parser.add_argument("--manual-review", action="store_true")
+    champion_compare = sub.add_parser("compare-champion")
+    for name in (
+        "c1",
+        "candidate-native",
+        "candidate-flip",
+        "champion-report",
+        "champion-csv",
+        "output",
+    ):
+        champion_compare.add_argument(f"--{name}", required=True, type=Path)
+    champion_export = sub.add_parser("export-champion")
+    for name in (
+        "c1-val",
+        "c1-test",
+        "candidate-native-val",
+        "candidate-flip-val",
+        "candidate-native-test",
+        "candidate-flip-test",
+        "champion-report",
+        "champion-csv",
+        "report",
+        "output",
+    ):
+        champion_export.add_argument(f"--{name}", required=True, type=Path)
+    champion_export.add_argument(
+        "--route", choices=("truck_bus_c1", "all_yolo"), default="truck_bus_c1"
+    )
+    champion_export.add_argument("--manual-review", action="store_true")
     args = parser.parse_args()
     os.environ.pop("CVLAB_DATA_ROOT", None)
     if args.command != "cache":
@@ -80,6 +108,43 @@ def main():
         raise FileNotFoundError("Work volume is not mounted")
     config = copy.deepcopy(load_config(args.config))
     config["data"].update(split="official", frame_step=1)
+    if args.command in ("compare-champion", "export-champion"):
+        from cvlab.yolo_champion import compare_champion, export_candidate
+
+        if args.command == "compare-champion":
+            import torch
+
+            require_ram()
+            torch.set_num_threads(1)
+            compare_champion(
+                args.c1,
+                args.candidate_native,
+                args.candidate_flip,
+                args.champion_report,
+                args.champion_csv,
+                config,
+                args.output,
+            )
+        else:
+            import torch
+
+            torch.set_num_threads(1)
+            export_candidate(
+                args.c1_val,
+                args.c1_test,
+                args.candidate_native_val,
+                args.candidate_flip_val,
+                args.candidate_native_test,
+                args.candidate_flip_test,
+                args.champion_report,
+                args.champion_csv,
+                args.report,
+                config,
+                args.output,
+                route=args.route,
+                manual_review=args.manual_review,
+            )
+        return
     if args.command in ("compare-flip", "export-flip"):
         from cvlab.yolo_flip_experiment import compare_flip, export_flip
 
