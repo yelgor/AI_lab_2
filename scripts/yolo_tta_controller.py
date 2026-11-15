@@ -1,6 +1,7 @@
 """Monitor a stable YOLO course and run frozen-champion TTA checks every 2 epochs."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -34,6 +35,11 @@ def _history(path):
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def _sha(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _write_status(path, **fields):
@@ -130,7 +136,13 @@ def main():
     cycle = 0
     desired_pair = 2
     next_health_check = 0.0
-    last_candidate = None
+    try:
+        previous_status = json.loads(controller_status.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        previous_status = {}
+    last_candidate = previous_status.get("last_candidate")
+    if last_candidate and isinstance(last_candidate.get("epoch"), int):
+        desired_pair = ((last_candidate["epoch"] + 1) // 2) * 2 + 2
     alerted = set()
 
     def launch_training():
@@ -233,25 +245,36 @@ def main():
                 ]
             )
         report = base / "comparison_vs_scored_champion.json"
-        _run(
-            common
-            + [
-                "compare-champion",
-                "--c1",
-                args.c1_val,
-                "--candidate-native",
-                native_val,
-                "--candidate-flip",
-                flip_val,
-                "--champion-report",
-                args.champion_report,
-                "--champion-csv",
-                args.champion_csv,
-                "--output",
-                report,
-            ]
-        )
-        comparison = json.loads(report.read_text())
+        if report.exists():
+            comparison = json.loads(report.read_text())
+            if (
+                comparison.get("protocol")
+                != "candidate-vs-scored-yolo-flip-champion-v1"
+                or comparison.get("candidate_checkpoint_sha256") != checkpoint_id
+                or comparison.get("champion_comparison_sha256")
+                != _sha(args.champion_report)
+            ):
+                raise RuntimeError("Existing candidate report has a different identity")
+        else:
+            _run(
+                common
+                + [
+                    "compare-champion",
+                    "--c1",
+                    args.c1_val,
+                    "--candidate-native",
+                    native_val,
+                    "--candidate-flip",
+                    flip_val,
+                    "--champion-report",
+                    args.champion_report,
+                    "--champion-csv",
+                    args.champion_csv,
+                    "--output",
+                    report,
+                ]
+            )
+            comparison = json.loads(report.read_text())
         eligible = []
         for route in ("truck_bus_c1", "all_yolo"):
             decision = comparison["decisions_vs_champion"][route]
@@ -319,7 +342,22 @@ def main():
             ]
             if manual:
                 export.append("--manual-review")
-            _run(export)
+            csv_metadata = csv_path.with_suffix(".csv.metadata.json")
+            if csv_path.exists():
+                saved = json.loads(csv_metadata.read_text())
+                if (
+                    saved.get("candidate_comparison_sha256") != _sha(report)
+                    or saved.get("champion_comparison_sha256")
+                    != _sha(args.champion_report)
+                    or saved.get("champion_csv_sha256") != _sha(args.champion_csv)
+                    or saved.get("route") != route
+                    or saved.get("validation", {}).get("sha256") != _sha(csv_path)
+                ):
+                    raise RuntimeError(
+                        "Existing candidate CSV metadata identity differs"
+                    )
+            else:
+                _run(export)
         summary = {
             "phase": "candidate_checked",
             "epoch": row["epoch"],
@@ -350,6 +388,31 @@ def main():
             else "Champion retained; no candidate passed."
         )
         _notify("CVLab YOLO candidate checked", message)
+
+    def evaluate_with_retries(row):
+        for attempt in range(1, 4):
+            try:
+                evaluate_epoch(row)
+                return True
+            except Exception as error:
+                _write_status(
+                    controller_status,
+                    phase="candidate_check_retry",
+                    epoch=row.get("epoch"),
+                    checkpoint_sha256=row.get("checkpoint_sha256"),
+                    attempt=attempt,
+                    error=str(error),
+                    completed_epochs=len(_history(history_path)),
+                    training_unit=unit,
+                    last_candidate=last_candidate,
+                )
+                _notify(
+                    "CVLab YOLO candidate check retry",
+                    f"Epoch {row.get('epoch', '?') + 1} review attempt {attempt}/3 failed; checkpoint retained. {error}",
+                )
+                if attempt < 3:
+                    time.sleep(30)
+        return False
 
     while time.monotonic() - started < args.max_hours * 3600:
         rows = _history(history_path)
@@ -393,11 +456,16 @@ def main():
                 )
                 while _active(unit):
                     time.sleep(1)
-            evaluate_epoch(row)
+            checked = evaluate_with_retries(row)
             if row["epoch"] + 1 >= args.epochs:
                 break
             (run / "STOP").unlink(missing_ok=True)
             desired_pair += 2
+            if not checked:
+                _notify(
+                    "CVLab YOLO course continues",
+                    "The candidate review failed after retries; no CSV was promoted. Resume from the saved optimizer checkpoint and review the next pair.",
+                )
             if not launch_training():
                 return 0
             continue
