@@ -149,17 +149,17 @@ def compare_champion(
     ):
         raise ValueError("Candidate and champion use different train manifests")
     baseline = parent["cases"]["flip_route"]["metrics"]
-    names = {"truck_bus_c1": "class_route", "all_yolo": "yolo"}
-    outputs = {key: [] for key in names}
     started = time.perf_counter()
-    for c1, yolo in _combined(
-        c1_path, candidate_native_path, candidate_flip_path, records
-    ):
-        outputs["truck_bus_c1"].extend(route_frame(c1, yolo, "class_route"))
-        outputs["all_yolo"].extend(yolo)
     cases = {}
     decisions = {}
-    for case, predictions in outputs.items():
+    for case in ("truck_bus_c1", "all_yolo"):
+        predictions = []
+        for c1, yolo in _combined(
+            c1_path, candidate_native_path, candidate_flip_path, records
+        ):
+            predictions.extend(
+                route_frame(c1, yolo, "class_route") if case == "truck_bus_c1" else yolo
+            )
         metrics = evaluate(records, predictions, [100, 500])
         metrics["per_video_mAP"] = per_video_scores(records, predictions)
         cases[case] = {"metrics": metrics, "detections": len(predictions)}
