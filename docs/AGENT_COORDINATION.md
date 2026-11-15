@@ -882,3 +882,31 @@ Class/size regression або недостатній gain не обходятьс
 Перевірено 57 CPU tests суміжних компонентів, Ruff/compile/diff checks;
 actual ensemble AP/GPU cost/public score тут не виміряні. Public-best
 0.2021478454 і ціль >0.2216324580 залишаються незмінними.
+
+### Frozen YOLO+c1 full-val comparison — 2026-11-15
+
+За `baseline_next.md` закешовано всі 2,846 official-val кадрів із незмінного
+c1 `c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4` та
+YOLO common-best `42e4c916c45a262d1e29863dc7edb919679528fa673241eef4641a25606285a8`.
+Використано c1 960 global+tiled pipeline і YOLO 1280 global; inference cache
+зайняв відповідно 1,654.24 s і 115.17 s. Дані й checkpoints лишилися локально.
+
+Повний local comparison COCO100/500: c1 `0.188016/0.188566`, YOLO
+`0.189765/0.190570`, fixed route `0.202613/0.203428`; route AP_small `0.129118`
+проти c1 `0.072257` і YOLO `0.119960`. Route бере truck/bus із c1, решту класів
+із YOLO. Pooled gain становить `+0.014596` проти c1 і `+0.012848` проти YOLO.
+Проти c1 покращились 6/7 families, але `uav0000305` впав на `0.065414`; paired
+family 90% interval `[-0.015933, 0.032703]`. Проти YOLO route пройшов строгий
+gate (6/7 positive families, lower `+0.003765`). Загальний статус
+`FAMILY_UNCERTAINTY_MANUAL_REVIEW`, `accepted=false`, `review_eligible=true`;
+це дозволяє лише локальний CSV для ручного розгляду, не promotion чи Kaggle
+score. Test inference з frozen checkpoints ще не виконано.
+
+YOLO course продовжено тим самим recipe після тимчасового GPU cache slot.
+Під час resume loss meter став `nan` від batch 74, але EMA, optimizer state та
+`last.pt` на збереженій межі були скінченні; точний checkpoint збережено окремим
+SHA snapshot. Повторений batch відтворив це значення в накопичуваному epoch
+meter. Поточний запуск доводиться до наступної full-validation межі, яка
+визначить стан ваг. Для test CSV потрібен окремий normal STOP-boundary slot;
+course після нього буде відновлено. Public c1 score `0.2021478454` не змінено;
+жоден локальний AP не є Kaggle score.
