@@ -401,8 +401,15 @@ def export(c1, yolo, config, report_path, output, *, manual_review=False):
         raise ValueError("Preserve an existing export; use a new destination")
     output.parent.mkdir(parents=True, exist_ok=True)
     root = Path(config["data"]["root"])
-    with (root / "sample_submission.csv").open(newline="") as stream:
-        order = [r["image_id"] for r in csv.DictReader(stream)]
+    sample_path = root / "sample_submission.csv"
+    if sample_path.is_file():
+        with sample_path.open(newline="") as stream:
+            order = [r["image_id"] for r in csv.DictReader(stream)]
+    else:
+        # Some Kaggle data packages provide only test_images.csv. Its order is
+        # the canonical template order in that case.
+        with (root / "test_images.csv").open(newline="") as stream:
+            order = [r["image_id"] for r in csv.DictReader(stream)]
     if len(order) != len(set(order)) or set(order) != {
         r["submission_id"] for r in records
     }:
@@ -431,7 +438,7 @@ def export(c1, yolo, config, report_path, output, *, manual_review=False):
                     next(rows)
                     writer.writerow(next(rows))
     checked = validate_submission(
-        temporary, root / "test_images.csv", root / "sample_submission.csv"
+        temporary, root / "test_images.csv", sample_path if sample_path.is_file() else None
     )
     if (
         not checked["valid"]

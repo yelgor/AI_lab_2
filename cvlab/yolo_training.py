@@ -233,6 +233,83 @@ def atomic_copy(source, target):
     temporary.replace(target)
 
 
+def _atomic_text(target, text):
+    target = Path(target)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(text)
+    temporary.replace(target)
+
+
+def _finite_tensor_state(value):
+    """Return names of nonfinite tensors in modules or optimizer state trees."""
+    import torch
+
+    bad = []
+
+    def visit(item, name):
+        if torch.is_tensor(item) and item.is_floating_point():
+            if not bool(torch.isfinite(item).all()):
+                bad.append(name)
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                visit(child, f"{name}.{key}")
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, f"{name}[{index}]")
+
+    if hasattr(value, "state_dict"):
+        value = value.state_dict()
+    visit(value, "state")
+    return bad
+
+
+def _trainer_numeric_diagnostics(trainer):
+    import torch
+
+    loss = getattr(trainer, "loss", None)
+    batch_finite = None if loss is None else bool(torch.isfinite(loss.detach()).all())
+    meter = getattr(trainer, "tloss", None)
+    meter_finite = meter is None or bool(torch.isfinite(meter).all())
+    model = getattr(trainer, "model", None)
+    ema = getattr(getattr(trainer, "ema", None), "ema", None)
+    optimizer = getattr(trainer, "optimizer", None)
+    scaler = getattr(trainer, "scaler", None)
+    scaler_state = scaler.state_dict() if scaler is not None else {}
+    scaler_values = [v for v in scaler_state.values() if isinstance(v, (int, float))]
+    scaler_scale = float(scaler_state.get("scale", 1.0))
+    return {
+        "batch_loss_finite": batch_finite,
+        "loss_meter_finite": meter_finite,
+        "model_nonfinite_tensors": _finite_tensor_state(model) if model is not None else [],
+        "ema_nonfinite_tensors": _finite_tensor_state(ema) if ema is not None else [],
+        "optimizer_nonfinite_tensors": _finite_tensor_state(optimizer) if optimizer is not None else [],
+        "scaler_finite": all(math.isfinite(float(v)) for v in scaler_values),
+        "scaler_scale_positive": scaler_scale > 0,
+        "scaler_scale": scaler_scale,
+        "scaler_state": scaler_state,
+        "skipped_optimizer_updates": int(getattr(trainer, "cvlab_skipped_updates", 0)),
+    }
+
+
+def _write_numeric_failure(trainer, run, reason):
+    diagnostics = _trainer_numeric_diagnostics(trainer)
+    loss = getattr(trainer, "loss", None)
+    current_loss = None
+    if loss is not None and loss.numel() == 1:
+        scalar = float(loss.detach().float().cpu())
+        current_loss = scalar if math.isfinite(scalar) else None
+    diagnostics.update(
+        reason=reason,
+        epoch=getattr(trainer, "epoch", None),
+        batch=getattr(trainer, "batch_i", None),
+        current_loss=current_loss,
+        checkpoint_sha256=(file_sha(trainer.last) if Path(trainer.last).is_file() else None),
+        time_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    )
+    _atomic_text(Path(run) / "numeric_failure.json", json.dumps(diagnostics, allow_nan=False, indent=2) + "\n")
+    return diagnostics
+
+
 @contextmanager
 def isolated_evaluation():
     """Evaluation/export setup must not reseed or retune the ongoing trainer."""
@@ -295,30 +372,54 @@ class EpochObserver:
         epoch = trainer.epoch
         if self.rows and epoch <= self.rows[-1]["epoch"]:
             return
+        boundary_diagnostics = _trainer_numeric_diagnostics(trainer)
+        if (
+            boundary_diagnostics["batch_loss_finite"] is False
+            or boundary_diagnostics["model_nonfinite_tensors"]
+            or boundary_diagnostics["ema_nonfinite_tensors"]
+            or boundary_diagnostics["optimizer_nonfinite_tensors"]
+            or not boundary_diagnostics["scaler_finite"]
+            or not boundary_diagnostics["scaler_scale_positive"]
+        ):
+            _write_numeric_failure(trainer, self.run, "nonfinite state at saved epoch boundary")
+            raise RuntimeError("Nonfinite training state; refusing further updates")
         print(f"YOLO epoch={epoch}: saved; full common validation starts", flush=True)
         with isolated_evaluation():
             row = evaluate_checkpoint(trainer.last, self.config)
         score = row["metrics"]["coco100"]["mAP"]
         if score is None or not math.isfinite(score):
             raise RuntimeError("Common validation returned no finite AP")
+        train_loss = None
+        meter_finite = True
+        if trainer.tloss is not None:
+            train_loss = []
+            for item in trainer.tloss.cpu():
+                value = float(item)
+                meter_finite = meter_finite and math.isfinite(value)
+                train_loss.append(value if math.isfinite(value) else None)
+        diagnostics = boundary_diagnostics
+        diagnostics["loss_meter_finite"] = meter_finite
         row.update(
             epoch=epoch,
             elapsed_seconds=time.monotonic() - self.started,
-            train_loss=[float(x) for x in trainer.tloss.cpu()]
-            if trainer.tloss is not None
-            else None,
+            train_loss=train_loss,
+            numeric_diagnostics=diagnostics,
             lr={
                 str(i): group["lr"]
                 for i, group in enumerate(trainer.optimizer.param_groups)
             },
         )
         best = max((r["metrics"]["coco100"]["mAP"] for r in self.rows), default=-1)
+        # Validate the complete report before changing common_best.pt. Otherwise a
+        # serialization failure could pair new weights with an older receipt.
+        row_json = json.dumps(row, allow_nan=False, separators=(",", ":"))
         if score > best:
+            receipt_json = json.dumps(row, allow_nan=False, indent=2) + "\n"
             atomic_copy(trainer.last, self.run / "weights" / "common_best.pt")
-            write_json(self.run / "common_best_metrics.json", row)
+            _atomic_text(self.run / "common_best_metrics.json", receipt_json)
         self.rows.append(row)
         with (self.run / "common_history.jsonl").open("a") as stream:
-            stream.write(json.dumps(row, allow_nan=False) + "\n")
+            stream.write(row_json + "\n")
         if self.export_every and (epoch + 1) % self.export_every == 0:
             best_path = self.run / "weights/common_best.pt"
             report = read_json(self.run / "common_best_metrics.json")
@@ -404,6 +505,7 @@ def train_challenger(
     workers=2,
     device="0",
     resume=False,
+    amp=None,
     initial_model=None,
     export_every=0,
 ):
@@ -431,6 +533,7 @@ def train_challenger(
             "User STOP exists; preserve it until continuation is explicitly requested"
         )
     data = prepare_dataset(root, prepared, work / "yolo_data")
+    use_amp = device != "cpu" if amp is None else bool(amp) and device != "cpu"
     config = common_config(
         root,
         prepared,
@@ -468,7 +571,7 @@ def train_challenger(
         max_det=500,
         conf=0.001,
         iou=0.6,
-        amp=device != "cpu",
+        amp=use_amp,
     )
     plan = {
         "backend": f"ultralytics=={__version__}",
@@ -479,9 +582,28 @@ def train_challenger(
     if resume:
         old = read_json(run / "yolo_plan.json")
         if old != plan:
-            raise ValueError(
-                "Resume requires the same recorded recipe/data; do not reset the schedule"
-            )
+            old_base = dict(old)
+            previous_precision_changes = old_base.pop("resume_precision_changes", [])
+            new_base = dict(plan)
+            old_arguments = dict(old_base.get("arguments", {}))
+            new_arguments = dict(new_base.get("arguments", {}))
+            old_amp = old_arguments.pop("amp", None)
+            new_amp = new_arguments.pop("amp", None)
+            old_base["arguments"] = old_arguments
+            new_base["arguments"] = new_arguments
+            if old_base != new_base or old_amp == new_amp:
+                raise ValueError(
+                    "Resume requires the same recorded recipe/data; only an explicit AMP stability change is allowed"
+                )
+            plan["resume_precision_changes"] = previous_precision_changes + [
+                {
+                    "field": "amp",
+                    "from": old_amp,
+                    "to": new_amp,
+                    "reason": "nonfinite model state and GradScaler underflow at a saved epoch boundary",
+                }
+            ]
+            write_json(run / "yolo_plan.json", plan)
         checkpoint = run / "weights" / "last.pt"
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
@@ -532,6 +654,48 @@ def train_challenger(
         observer(previous)
         if previous.stop:
             return run
+
+    last_scaler_scale = [None]
+
+    def guard_numeric_state(trainer):
+        import torch
+
+        scaler = getattr(trainer, "scaler", None)
+        if scaler is not None:
+            scale = float(scaler.get_scale())
+            previous = last_scaler_scale[0]
+            if previous is not None and scale < previous:
+                trainer.cvlab_skipped_updates = getattr(trainer, "cvlab_skipped_updates", 0) + 1
+            last_scaler_scale[0] = scale
+            if not math.isfinite(scale) or scale <= 0:
+                _write_numeric_failure(trainer, run, "GradScaler scale is nonfinite or underflowed to zero")
+                raise RuntimeError("Invalid GradScaler state; stopping before another batch")
+        if trainer.loss is not None and not bool(torch.isfinite(trainer.loss.detach()).all()):
+            _write_numeric_failure(
+                trainer, run, "nonfinite current batch loss; stopping before next update"
+            )
+            raise RuntimeError(
+                "Nonfinite training loss at epoch "
+                f"{trainer.epoch}, batch {getattr(trainer, 'batch_i', 'unknown')}; "
+                "the previous saved checkpoint remains the recovery point"
+            )
+
+    def guard_training_start(trainer):
+        diagnostics = _trainer_numeric_diagnostics(trainer)
+        if (
+            diagnostics["model_nonfinite_tensors"]
+            or diagnostics["ema_nonfinite_tensors"]
+            or diagnostics["optimizer_nonfinite_tensors"]
+            or not diagnostics["scaler_finite"]
+            or not diagnostics["scaler_scale_positive"]
+        ):
+            _write_numeric_failure(trainer, run, "invalid state before optimizer updates")
+            raise RuntimeError("Invalid resume state; refusing optimizer updates")
+        scaler = getattr(trainer, "scaler", None)
+        last_scaler_scale[0] = float(scaler.get_scale()) if scaler is not None else None
+
+    model.add_callback("on_train_start", guard_training_start)
+    model.add_callback("on_train_batch_end", guard_numeric_state)
     model.add_callback("on_fit_epoch_end", observer)
     model.train(trainer=FullDataTrainer, resume=resume, **arguments)
     return run

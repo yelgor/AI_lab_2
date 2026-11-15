@@ -35,6 +35,11 @@ def main():
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Use full precision while resuming a numerically unstable AMP course",
+    )
+    parser.add_argument(
         "--export",
         action="store_true",
         help="Export after training, for review; never submits",
@@ -132,6 +137,7 @@ def main():
                     workers=args.workers,
                     device=args.device,
                     resume=args.resume,
+                    amp=False if args.no_amp else None,
                     export_every=args.export_every,
                 )
             if args.export or args.export_only:

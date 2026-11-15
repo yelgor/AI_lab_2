@@ -132,6 +132,58 @@ def test_observer_waits_multiple_epochs_and_keeps_best(monkeypatch, tmp_path):
     assert len((run / "common_history.jsonl").read_text().splitlines()) == 5
 
 
+def test_observer_serializes_nonfinite_meter_as_null_before_promoting(monkeypatch, tmp_path):
+    from cvlab import yolo_training as module
+
+    run = tmp_path / "run"
+    weights = run / "weights"
+    weights.mkdir(parents=True)
+    last = weights / "last.pt"
+    last.write_bytes(b"new weights")
+    best = weights / "common_best.pt"
+    best.write_bytes(b"old weights")
+    (run / "common_best_metrics.json").write_text('{"old":true}')
+    monkeypatch.setattr(
+        module,
+        "evaluate_checkpoint",
+        lambda *a: {
+            "metrics": {"coco100": {"mAP": 0.21}},
+            "checkpoint_sha256": module.file_sha(last),
+        },
+    )
+    trainer = SimpleNamespace(
+        epoch=0,
+        last=last,
+        tloss=torch.tensor([1.0, float("nan"), float("inf")]),
+        stop=False,
+        optimizer=SimpleNamespace(param_groups=[{"lr": 0.001}]),
+    )
+    EpochObserver(run, {}, 1)(trainer)
+    row = json.loads((run / "common_history.jsonl").read_text())
+    assert row["train_loss"] == [1.0, None, None]
+    assert row["numeric_diagnostics"]["loss_meter_finite"] is False
+    assert row["numeric_diagnostics"]["batch_loss_finite"] is None
+    assert best.read_bytes() == b"new weights"
+    assert read_json(run / "common_best_metrics.json")["train_loss"] == [1.0, None, None]
+
+    last.write_bytes(b"candidate with unserializable receipt")
+    old_weights = best.read_bytes()
+    old_receipt = (run / "common_best_metrics.json").read_bytes()
+    monkeypatch.setattr(
+        module,
+        "evaluate_checkpoint",
+        lambda *a: {
+            "metrics": {"coco100": {"mAP": 0.22}, "bad": float("nan")},
+            "checkpoint_sha256": module.file_sha(last),
+        },
+    )
+    trainer.epoch = 1
+    with pytest.raises(ValueError, match="JSON compliant"):
+        EpochObserver(run, {}, 1)(trainer)
+    assert best.read_bytes() == old_weights
+    assert (run / "common_best_metrics.json").read_bytes() == old_receipt
+
+
 def test_stock_yolo_cpu_training_saved_validation_and_resume(
     competition, tmp_path, monkeypatch  # noqa: F811
 ):  # noqa: F811
