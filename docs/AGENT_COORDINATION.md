@@ -822,3 +822,11 @@ native confirmation (`CONFIRM native`, 2,846 кадрів) перед остат
 CSV та новий Kaggle score відсутні. Source c1 SHA збережений. Service і періодичний
 watchdog активні. Цю перевірку опубліковано окремою гілкою
 `experiment/c1-lrhalf-continuous`, відгалуженою від поточного `main`.
+
+### YOLO11s full-data course started — 2026-11-15, 12:08 EET
+
+Звірено локальні `main` (на `2f9d8ca`) і `experiment/c1-lrhalf-continuous` (на `e81adac`); код YOLO є від `f9303b6`. RT-DETR процесів більше немає. У log зафіксовано epoch 3 native mAP `0.197592` та початок окремої native confirmation, але її підсумкової метрики/receipt не знайдено; отже підтвердження не зараховується. Public-best c1 з Kaggle `0.2021478454` збережений.
+
+Data-volume доступний тільки read-only. YOLO dataset CPU-підготовку завершено з усіма 24,201 train та 2,846 official-val кадрами; сімейства польотів незалежні між split-ами (49 train, 7 val). `ultralytics==8.3.250` встановлений у чинному середовищі; Torch/TorchVision CUDA `2.6.0+cu118 / 0.21.0+cu118` після встановлення лишилися працездатними. Навчання стартувало з офіційних COCO `yolo11s.pt` за зафіксованим рецептом у `cvlab-yolo11s.service` із sleep/lid/power-key inhibition. Watchdog та power-guard timers активні.
+
+Перший вимір ранньої стабілізованої ділянки: близько `7.7 batches/s` (фізичний batch 2, тобто приблизно `15.4 frames/s`); проєкція train-частини епохи — близько 26 хв, до повної validation ще не виміряно. Це попередня швидкість за частковою епохою; фактичний повний час/throughput запишеться після epoch 1. На час запису epoch 1 працює, метрик AP/CSV ще немає. Проміжний перерваний asset-download не використовувався як initialization; фінальний процес завантажив і прочитав офіційні COCO ваги. `c1_lrhalf` STOP збережений; наступні RT-DETR епохи/final-fit не запускалися.
