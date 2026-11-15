@@ -508,11 +508,15 @@ def train_challenger(
     amp=None,
     initial_model=None,
     export_every=0,
+    init_checkpoint=None,
+    lr=0.001,
+    freeze_batch_norm=False,
 ):
     """One fixed course, official COCO initialization, full data every epoch."""
     configure_optional_backend(work)
     from ultralytics import YOLO, __version__
     from .yolo_backend import FullDataTrainer
+    from .yolo_recovery import RecoveryTrainer
 
     work = Path(work).resolve()
     if not name or Path(name).name != name or name in (".", ".."):
@@ -523,6 +527,7 @@ def train_challenger(
         or hours <= 0
         or batch < 1
         or image_size % 32
+        or not math.isfinite(lr) or lr <= 0
     ):
         raise ValueError(
             "Positive epoch/batch/time and stride-aligned image size required"
@@ -534,6 +539,8 @@ def train_challenger(
         )
     data = prepare_dataset(root, prepared, work / "yolo_data")
     use_amp = device != "cpu" if amp is None else bool(amp) and device != "cpu"
+    if init_checkpoint is not None and initial_model is not None:
+        raise ValueError("Choose one initialization source")
     config = common_config(
         root,
         prepared,
@@ -559,7 +566,7 @@ def train_challenger(
         val=False,
         patience=0,
         optimizer="AdamW",
-        lr0=0.001,
+        lr0=lr,
         lrf=0.05,
         cos_lr=True,
         warmup_epochs=1.0,
@@ -579,19 +586,30 @@ def train_challenger(
         "arguments": arguments,
         "dataset": read_json(data.parent / "prepared.json"),
     }
+    if init_checkpoint is not None:
+        plan.update(initial_model="learned_eight_class_checkpoint",
+                    initialization_sha256=file_sha(init_checkpoint))
+    if freeze_batch_norm:
+        plan["freeze_batch_norm"] = True
+    trainer_type = RecoveryTrainer if amp is not None or init_checkpoint is not None else FullDataTrainer
+    if trainer_type is RecoveryTrainer:
+        plan["resume_format"] = "raw-model-fp32-v1"
     if resume:
         old = read_json(run / "yolo_plan.json")
-        if old != plan:
-            old_base = dict(old)
-            previous_precision_changes = old_base.pop("resume_precision_changes", [])
-            new_base = dict(plan)
+        old_base = dict(old)
+        previous_precision_changes = old_base.pop("resume_precision_changes", [])
+        comparable = dict(plan)
+        old_format = old_base.pop("resume_format", None)
+        comparable.pop("resume_format", None)
+        if old_base != comparable:
+            new_base = comparable
             old_arguments = dict(old_base.get("arguments", {}))
             new_arguments = dict(new_base.get("arguments", {}))
             old_amp = old_arguments.pop("amp", None)
             new_amp = new_arguments.pop("amp", None)
             old_base["arguments"] = old_arguments
             new_base["arguments"] = new_arguments
-            if old_base != new_base or old_amp == new_amp:
+            if old_base != new_base or not (old_amp is True and new_amp is False):
                 raise ValueError(
                     "Resume requires the same recorded recipe/data; only an explicit AMP stability change is allowed"
                 )
@@ -603,11 +621,19 @@ def train_challenger(
                     "reason": "nonfinite model state and GradScaler underflow at a saved epoch boundary",
                 }
             ]
+        elif previous_precision_changes:
+            plan["resume_precision_changes"] = previous_precision_changes
+        if old_format == "raw-model-fp32-v1":
+            trainer_type = RecoveryTrainer
+            plan["resume_format"] = old_format
+        if old != plan:
             write_json(run / "yolo_plan.json", plan)
-        checkpoint = run / "weights" / "last.pt"
+        raw_resume = run / "weights/resume_fp32.pt"
+        checkpoint = raw_resume if trainer_type is RecoveryTrainer and raw_resume.exists() else run / "weights/last.pt"
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         model = YOLO(str(checkpoint))
+        config["model"]["name"] = "yolo11" + model.model.yaml.get("scale", "s")
     else:
         if (run / "yolo_plan.json").exists():
             if (
@@ -621,19 +647,44 @@ def train_challenger(
         write_json(run / "yolo_plan.json", plan)
         write_json(run / "config.json", config)
         # The only production initialization is the official COCO asset.
-        source = initial_model or str(work / "cache" / "ultralytics" / "yolo11s.pt")
+        source = str(init_checkpoint) if init_checkpoint is not None else initial_model or str(work / "cache" / "ultralytics" / "yolo11s.pt")
+        if initial_model in {"yolo11s.pt", "yolo11m.pt"}:
+            source = str(work / "cache" / "ultralytics" / initial_model)
         model = YOLO(source)
+        if init_checkpoint is not None:
+            import torch
+            source_data = (model.ckpt or {}).get("train_args", {}).get("data")
+            provenance = Path(source_data).parent / "prepared.json" if isinstance(source_data, str) else None
+            if provenance is None or not provenance.is_file():
+                raise ValueError("Warm start requires preserved training-dataset provenance")
+            source_dataset = read_json(provenance)
+            if set(source_dataset["families"]["train"]) & set(plan["dataset"]["families"]["val"]):
+                raise ValueError("Warm-start source trained on held-out validation families")
+            if list(model.model.names.values()) != CLASSES:
+                raise ValueError("Warm start must have exactly the learned eight competition classes")
+            if any(not torch.isfinite(t).all() for t in model.model.state_dict().values()):
+                raise ValueError("Warm-start model contains nonfinite parameters/buffers")
+            print("Warm start: learned weights retained; new recipe starts a fresh optimizer explicitly", flush=True)
+        config["model"]["name"] = "yolo11" + model.model.yaml.get("scale", "s")
+        write_json(run / "config.json", config)
         if Path(source).is_file():
             write_json(
                 run / "initialization.json",
                 {
-                    "source": "official COCO yolo11s.pt"
+                    "source": "learned_eight_class_checkpoint" if init_checkpoint is not None else "official COCO yolo11s.pt"
                     if initial_model is None
                     else initial_model,
                     "sha256": file_sha(source),
+                    "optimizer_restored": False,
                 },
             )
-    FullDataTrainer.ignore_path = data.parent / "ignored_train.json"
+        if init_checkpoint is not None and not (run / "initial_validation.json").exists():
+            with isolated_evaluation():
+                initial = evaluate_checkpoint(source, config)
+            write_json(run / "initial_validation.json", initial)
+    trainer_type.ignore_path = data.parent / "ignored_train.json"
+    if trainer_type is RecoveryTrainer:
+        trainer_type.freeze_batch_norm = freeze_batch_norm
     observer = EpochObserver(run, config, hours, export_every=export_every)
     if resume and model.ckpt["epoch"] > (
         observer.rows[-1]["epoch"] if observer.rows else -1
@@ -697,5 +748,10 @@ def train_challenger(
     model.add_callback("on_train_start", guard_training_start)
     model.add_callback("on_train_batch_end", guard_numeric_state)
     model.add_callback("on_fit_epoch_end", observer)
-    model.train(trainer=FullDataTrainer, resume=resume, **arguments)
+    def verify_precision(trainer):
+        if not use_amp and trainer.amp:
+            raise RuntimeError("Requested FP32 training but trainer enabled AMP")
+
+    model.add_callback("on_pretrain_routine_end", verify_precision)
+    model.train(trainer=trainer_type, resume=resume, **arguments)
     return run

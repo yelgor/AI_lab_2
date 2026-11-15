@@ -21,6 +21,8 @@ def main():
         help="Existing config supplies actual root/prepared paths only",
     )
     parser.add_argument("--name", default="yolo11s_1280")
+    parser.add_argument("--model", choices=["yolo11s.pt", "yolo11m.pt"], default="yolo11s.pt",
+                        help="Official COCO initialization for a new architecture experiment")
     parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument(
         "--hours",
@@ -34,6 +36,9 @@ def main():
     parser.add_argument("--device", default="0", choices=["0", "cpu"])
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--init-checkpoint", type=Path, help="New run from learned eight-class weights; optimizer restarts explicitly")
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--freeze-batch-norm", action="store_true")
     parser.add_argument(
         "--no-amp",
         action="store_true",
@@ -59,6 +64,7 @@ def main():
         or args.imgsz % 32
         or not math.isfinite(args.hours)
         or args.hours <= 0
+        or not math.isfinite(args.lr) or args.lr <= 0
         or not 0 <= args.workers <= 4
         or args.export_every < 0
         or not args.name
@@ -139,6 +145,10 @@ def main():
                     resume=args.resume,
                     amp=False if args.no_amp else None,
                     export_every=args.export_every,
+                    init_checkpoint=args.init_checkpoint,
+                    initial_model=None if args.model == "yolo11s.pt" else args.model,
+                    lr=args.lr,
+                    freeze_batch_norm=args.freeze_batch_norm,
                 )
             if args.export or args.export_only:
                 configure_optional_backend(work)

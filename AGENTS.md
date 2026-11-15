@@ -27,10 +27,16 @@
    він не є automatic promotion або дозволом на Kaggle auto-submit.
 10. Новий запис обміну агентів без приватної телеметрії:
     [public score 2026-11-15](docs/coordination/2026-11-15-public-score.md).
-    Актуальний public-best після наданого screenshot: ансамбль
-    **0.2176009680**, baseline ще не перевищений. Зберігати обидві frozen-моделі
-    та CSV; [наступний обмежений A/B](docs/next_after_02176.md) використовує їх
-    без повторного c1 inference. Пошкоджений NaN epoch 4 не відновлювати.
+    Попередній public-best у цьому записі: ансамбль **0.2176009680**.
+    Новий screenshot підтвердив **0.2237335225**, baseline перевищений.
+    Зберігати обидві frozen-моделі
+    та CSV; [попередній A/B](docs/next_after_02176.md) уже завершений і не
+    потребує повторного c1 inference. Пошкоджений NaN epoch 4 не відновлювати.
+11. Поточна ціль користувача — score близько **0.30**. Актуальне доручення:
+    [baseline crossed](docs/coordination/2026-11-15-baseline-crossed.md) і
+    [стабільне продовження / більша модель](docs/toward_030.md).
+    Наявні public-best CSV/weights не замінювати без виміряного результату;
+    навчання нового FP32 recipe починається з хороших learned weights.
 
 ## Режим спільної роботи
 
