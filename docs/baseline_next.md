@@ -1,7 +1,11 @@
 # Next measured attempt to exceed the competition baseline
 
 Engineering instruction, 2026-11-15. The target is public **>0.2216324580**;
-the preserved best is c1 **0.2021478454**. No new score is asserted here.
+the fixed route below has now scored **0.2176009680** on Kaggle. Its first
+validation/export steps are completed; preserve their caches rather than
+rerunning them. Read [the scored result and next bounded test](next_after_02176.md).
+c1 **0.2021478454** remains a preserved single-model fallback. The original
+instructions below document the completed route experiment.
 
 ## Immediate local work
 

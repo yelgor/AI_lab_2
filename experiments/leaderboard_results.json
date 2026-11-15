@@ -86,7 +86,7 @@
       "file": "rtdetr_c1d7fcc83dde_trial0_6000_tiles.csv",
       "model": "rtdetr",
       "checkpoint_sha256_prefix": "c1d7fcc83dde",
-"checkpoint_identity_note": "Full checkpoint and CSV hashes verified locally; prior user report rounded this score to 0.206, later precise screenshot recorded 0.2021478454 for the same filename.",
+      "checkpoint_identity_note": "Full checkpoint and CSV hashes verified locally; prior user report rounded this score to 0.206, later precise screenshot recorded 0.2021478454 for the same filename.",
       "image_size": 960,
       "inference": "global plus tiled; tile=960, overlap=0.2, nms_iou=0.6, edge_margin=2",
       "public_score": 0.2021478454,
@@ -118,9 +118,64 @@
       "local_full_official_tiled_AP": 0.1988934563,
       "local_full_tiled_gain_vs_c1_source": 0.0108940135,
       "status": "Public regression despite passing full official validation gates; preserve as evidence, but do not use as the next training source or public best."
+    },
+    {
+      "file": "yolo_c1_pair_epoch_004.csv",
+      "model": "class_ensemble",
+      "protocol": "fixed-truck-bus-route-v1",
+      "csv_sha256": "1d4ac45ca8f1b121d40c65ddea376a498b845ab1249cd0f00063eb2f8ddf2562",
+      "inputs": [
+        {
+          "model": "rtdetr",
+          "checkpoint_sha256": "c1d7fcc83dde045578514e64c85e04b215fca988c804985f1a5a313ebe6daab4",
+          "image_size": 960,
+          "inference": "global plus tiled; tile=960, overlap=0.2, nms_iou=0.6, edge_margin=2",
+          "classes": [
+            "truck",
+            "bus"
+          ]
+        },
+        {
+          "model": "yolo11s",
+          "checkpoint_sha256": "42e4c916c45a262d1e29863dc7edb919679528fa673241eef4641a25606285a8",
+          "image_size": 1280,
+          "inference": "global",
+          "classes": [
+            "person",
+            "bicycle",
+            "car",
+            "van",
+            "tricycle",
+            "motor"
+          ]
+        }
+      ],
+      "public_score": 0.217600968,
+      "public_score_display": "0.2176009680",
+      "evidence": "User-provided Kaggle leaderboard screenshot on 2026-11-15 shows a new personal best 0.2176009680 and previous best 0.2021478454.",
+      "file_identity_evidence": "User associates the screenshot with this CSV and pastes its local SHA256 report; CSV/weights remain local and were not read by the web agent.",
+      "baseline_exceeded": false,
+      "target_reached": false,
+      "gain_vs_previous_public_best": 0.0154531226,
+      "gap_to_baseline": 0.00403149,
+      "gap_to_user_target": 0.062399032,
+      "local_full_official_validation_frames": 2846,
+      "local_full_official_coco100_AP": 0.202613,
+      "local_full_official_coco500_AP": 0.203428,
+      "local_full_official_AP_small": 0.129118,
+      "local_metric_precision": "Rounded operational measurements, distinct from exact displayed public score.",
+      "manual_review": true,
+      "strict_promotion_accepted": false,
+      "status": "SCORED; highest observed public score. Preserve CSV, both exact input checkpoints, caches and metadata; the numerical-failure epoch-4 weights were not used."
     }
   ],
   "baseline_public_score": 0.221632458,
   "target_public_score_operator": ">=",
-  "target_updated_on": "2026-11-11"
+  "target_updated_on": "2026-11-11",
+  "current_public_best": {
+    "file": "yolo_c1_pair_epoch_004.csv",
+    "public_score": 0.217600968,
+    "csv_sha256": "1d4ac45ca8f1b121d40c65ddea376a498b845ab1249cd0f00063eb2f8ddf2562",
+    "updated_on": "2026-11-15"
+  }
 }

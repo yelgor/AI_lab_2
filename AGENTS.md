@@ -25,6 +25,12 @@
    одна фіксована комбінація; чинний YOLO course не скидається. Окремий явний
    manual-review export зберігає class/size/pooled guards та family warnings;
    він не є automatic promotion або дозволом на Kaggle auto-submit.
+10. Новий запис обміну агентів без приватної телеметрії:
+    [public score 2026-11-15](docs/coordination/2026-11-15-public-score.md).
+    Актуальний public-best після наданого screenshot: ансамбль
+    **0.2176009680**, baseline ще не перевищений. Зберігати обидві frozen-моделі
+    та CSV; [наступний обмежений A/B](docs/next_after_02176.md) використовує їх
+    без повторного c1 inference. Пошкоджений NaN epoch 4 не відновлювати.
 
 ## Режим спільної роботи
 
