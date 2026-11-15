@@ -1042,7 +1042,9 @@ submission не запускаються для кандидата до прох
 
 Код generic champion comparison, перевірки parent/cohort/view identities і
 run-specific controller локально перевірено: `6 passed`, Ruff, compile та
-`git diff --check` пройшли. Перший кандидатний A/B ще не завершений; після двох
-епох його метрики/CSV буде записано окремо. Наступна дія — супроводжувати run,
-перевірити повний A/B і одразу повідомити локальні метрики та шлях CSV, якщо gate
-пройдено. Жодного нового public score цим записом не заявлено.
+`git diff --check` пройшли. Додатковий self-control на тих самих frozen
+champion caches точно відтворив class route (Δ COCO100 mAP `0.000000`); all-YOLO
+route мав Δ `-0.0105588778`. Обидва закономірно відхилені; це не новий кандидат,
+CSV не створювався. CPU comparison тривав `706.62 s`; GPU inference не запускався.
+Перший навчений checkpoint A/B ще очікує двох повних епох; метрики/CSV буде
+записано окремо. Жодного нового public score цим записом не заявлено.
