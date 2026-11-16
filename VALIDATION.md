@@ -14,7 +14,8 @@
 ```bash
 .venv/bin/python -m cvlab evaluate \
   --config /path/to/config.yaml \
-  --checkpoint /path/to/best.pt
+  --checkpoint /path/to/best.pt \
+  --out /path/to/evaluation.json
 ```
 
 Використовуйте ту саму конфігурацію даних, роздільність, правила інференсу та ліміт детекцій для варіантів, які порівнюєте. Основні метрики: COCO AP при IoU 0.50–0.95, AP50, AP_small та AP за класами. Варіанти з maxDets 100 і 500 записуються окремо.
@@ -32,3 +33,4 @@
 Окрім відсутності помилок, звірте `valid=true`, `matches_template_order=true`, `all_predictions_empty=false`. Порожній окремий кадр допускається. Формат одного передбачення: `class score x y width height`; класи 0–7, координати у вихідних пікселях, максимум 500 детекцій/кадр.
 
 Значення public score береться з відповіді Kaggle. У [журналі](experiments/leaderboard_results.json) є точні назви оцінених CSV та відомі хеші. Короткий probe, зниження train loss або наявність checkpoint-файла не замінюють повну перевірку якості.
+
